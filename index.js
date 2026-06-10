@@ -1,68 +1,90 @@
-import {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-} from "discord.js";
-import axios from "axios";
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
+const axios = require("axios");
+const crypto = require("crypto");
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
 
 const API = "https://yo-bot--ankymacro1.replit.app";
 
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN!);
+/* ---------------- SIGN ---------------- */
+
+function sign(secret) {
+  const timestamp = Date.now().toString();
+  const payload = `${timestamp}.`;
+
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
+
+  return { signature, timestamp };
+}
+
+/* ---------------- GET KEY ---------------- */
+
+async function getKey() {
+  const secret = process.env.BOT_SECRET;
+  if (!secret) throw new Error("BOT_SECRET missing");
+
+  const { signature, timestamp } = sign(secret);
+
+  const res = await axios.get(`${API}/keys/unused`, {
+    headers: {
+      "x-signature": signature,
+      "x-timestamp": timestamp,
+    },
+    timeout: 8000,
+  });
+
+  return res.data?.key;
+}
+
+/* ---------------- COMMANDS ---------------- */
 
 const commands = [
   new SlashCommandBuilder()
-    .setName("dashboard")
-    .setDescription("Live key system dashboard"),
-].map((c) => c.toJSON());
+    .setName("getkey")
+    .setDescription("Get a license key"),
+].map(c => c.toJSON());
+
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 async function register() {
-  await rest.put(Routes.applicationCommands(process.env.CLIENT_ID!), {
-    body: commands,
-  });
+  await rest.put(
+    Routes.applicationCommands(process.env.CLIENT_ID),
+    { body: commands }
+  );
 }
 
-function headers() {
-  return { "x-admin-secret": process.env.ADMIN_SECRET! };
-}
+/* ---------------- READY ---------------- */
 
 client.once("ready", async () => {
-  console.log("Bot online");
+  console.log(`Bot online: ${client.user.tag}`);
   await register();
 });
 
+/* ---------------- INTERACTION ---------------- */
+
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
-  if (i.commandName !== "dashboard") return;
+  if (i.commandName !== "getkey") return;
 
-  const [dashRes, keysRes, invRes] = await Promise.all([
-    axios.get(`${API}/admin/dashboard`, { headers: headers() }),
-    axios.get(`${API}/admin/keys`, { headers: headers() }),
-    axios.get(`${API}/admin/invites/tree`, { headers: headers() }),
-  ]);
+  await i.deferReply({ ephemeral: true });
 
-  const dash = dashRes.data;
-  const keys = keysRes.data;
+  try {
+    const key = await getKey();
 
-  const embed = new EmbedBuilder()
-    .setTitle("📊 SYSTEM V3 DASHBOARD")
-    .addFields(
-      { name: "Users", value: String(dash.users), inline: true },
-      { name: "Active Keys", value: String(dash.keys.active), inline: true },
-      { name: "Expired Keys", value: String(dash.keys.expired), inline: true },
-      {
-        name: "Total Clicks",
-        value: String(dash.activity.clicks),
-        inline: true,
-      }
-    )
-    .setColor(0x00aaff);
+    if (!key) {
+      return i.editReply("No keys available.");
+    }
 
-  await i.reply({ embeds: [embed], ephemeral: true });
+    return i.editReply(`Your key: ${key}`);
+  } catch (err) {
+    console.error(err?.response?.data || err.message);
+    return i.editReply("API error.");
+  }
 });
 
-client.login(process.env.TOKEN!);
+client.login(process.env.TOKEN);
