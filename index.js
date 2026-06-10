@@ -1,133 +1,152 @@
-const {
+import {
   Client,
   GatewayIntentBits,
-  SlashCommandBuilder,
+  EmbedBuilder,
   REST,
   Routes,
-  EmbedBuilder,
-} = require("discord.js");
-const axios = require("axios");
+  SlashCommandBuilder,
+  InteractionReplyOptions,
+} from "discord.js";
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+import axios from "axios";
 
-const API = process.env.API_URL;
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
 
-function adminHeaders() {
-  return { "x-admin-secret": process.env.ADMIN_SECRET };
-}
+/* =========================================================
+   ENV SAFETY
+========================================================= */
 
-/* ---------------- COMMANDS ---------------- */
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const ADMIN_KEY = process.env.ADMIN_KEY;
+const API_URL = process.env.API_URL;
+
+if (!TOKEN) throw new Error("Missing TOKEN");
+if (!CLIENT_ID) throw new Error("Missing CLIENT_ID");
+if (!ADMIN_KEY) throw new Error("Missing ADMIN_KEY");
+if (!API_URL) throw new Error("Missing API_URL");
+
+/* =========================================================
+   AXIOS CLIENT
+========================================================= */
+
+const api = axios.create({
+  baseURL: API_URL,
+  timeout: 8000,
+  headers: {
+    Authorization: ADMIN_KEY,
+  },
+});
+
+/* =========================================================
+   SLASH COMMANDS
+========================================================= */
 
 const commands = [
   new SlashCommandBuilder()
-    .setName("getkey")
-    .setDescription("Get a license key"),
-
-  new SlashCommandBuilder()
     .setName("dashboard")
-    .setDescription("Admin dashboard"),
+    .setDescription("View live key system stats"),
+].map((c) => c.toJSON());
 
-  new SlashCommandBuilder()
-    .setName("keys")
-    .setDescription("View all keys (admin)"),
+const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-  new SlashCommandBuilder()
-    .setName("invites")
-    .setDescription("View invite stats (admin)"),
+async function registerCommands() {
+  try {
+    await rest.put(Routes.applicationCommands(CLIENT_ID), {
+      body: commands,
+    });
 
-  new SlashCommandBuilder()
-    .setName("activity")
-    .setDescription("View audit logs (admin)"),
-].map(c => c.toJSON());
-
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
-
-/* ---------------- REGISTER ---------------- */
-
-client.once("ready", async () => {
-  await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
-    body: commands,
-  });
-
-  console.log("Bot online");
-});
-
-/* ---------------- KEY FETCH ---------------- */
-
-async function getKey() {
-  const res = await axios.get(`${API}/keys/unused`, {
-    headers: { Authorization: process.env.BOT_SECRET },
-  });
-
-  return res.data?.key;
+    console.log("Slash commands registered");
+  } catch (err) {
+    console.error("Command register failed:", err);
+  }
 }
 
-/* ---------------- COMMAND HANDLER ---------------- */
+/* =========================================================
+   BOT READY
+========================================================= */
 
-client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand()) return;
+client.once("ready", async () => {
+  console.log(`Bot online: ${client.user?.tag}`);
+  await registerCommands();
+});
 
-  /* USER COMMAND */
-  if (i.commandName === "getkey") {
-    await i.deferReply({ ephemeral: true });
+/* =========================================================
+   DASHBOARD COMMAND
+========================================================= */
 
-    const key = await getKey();
-    if (!key) return i.editReply("No keys available");
+client.on("interactionCreate", async (interaction) => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (interaction.commandName !== "dashboard") return;
 
-    return i.editReply(`Key: ${key}`);
-  }
+    await interaction.deferReply({
+      ephemeral: true,
+    } as InteractionReplyOptions);
 
-  /* ADMIN DASHBOARD */
-  if (i.commandName === "dashboard") {
-    const [keys, invites] = await Promise.all([
-      axios.get(`${API}/admin/keys`, { headers: adminHeaders() }),
-      axios.get(`${API}/admin/invites`, { headers: adminHeaders() }),
+    const [usersRes, keysRes] = await Promise.all([
+      api.get("/admin/invites"),
+      api.get("/admin/keys"),
     ]);
 
-    const k = keys.data;
-    const u = invites.data;
+    const users = usersRes.data ?? [];
+    const keys = keysRes.data ?? [];
+
+    const activeKeys = keys.filter((k: any) => !k.revoked && !k.expired);
+    const expiredKeys = keys.filter((k: any) => k.expired);
 
     const embed = new EmbedBuilder()
-      .setTitle("Live Dashboard")
+      .setTitle("📊 Live Key Dashboard")
+      .setColor(0x3498db)
       .addFields(
-        { name: "Total Keys", value: String(k.length), inline: true },
-        { name: "Active", value: String(k.filter(x => !x.expired).length), inline: true },
-        { name: "Users", value: String(u.length), inline: true },
-      )
-      .setColor(0x00aaff);
+        {
+          name: "Users",
+          value: String(users.length),
+          inline: true,
+        },
+        {
+          name: "Active Keys",
+          value: String(activeKeys.length),
+          inline: true,
+        },
+        {
+          name: "Expired Keys",
+          value: String(expiredKeys.length),
+          inline: true,
+        }
+      );
 
-    return i.reply({ embeds: [embed], ephemeral: true });
-  }
-
-  /* ADMIN KEYS LIST */
-  if (i.commandName === "keys") {
-    const res = await axios.get(`${API}/admin/keys`, { headers: adminHeaders() });
-
-    return i.reply({
-      content: JSON.stringify(res.data, null, 2).slice(0, 1900),
-      ephemeral: true,
+    return interaction.editReply({
+      embeds: [embed],
     });
-  }
+  } catch (err) {
+    console.error("Dashboard error:", err);
 
-  /* ADMIN INVITES */
-  if (i.commandName === "invites") {
-    const res = await axios.get(`${API}/admin/invites`, { headers: adminHeaders() });
-
-    return i.reply({
-      content: JSON.stringify(res.data, null, 2).slice(0, 1900),
-      ephemeral: true,
-    });
-  }
-
-  /* AUDIT LOGS */
-  if (i.commandName === "activity") {
-    const res = await axios.get(`${API}/admin/activity`, { headers: adminHeaders() });
-
-    return i.reply({
-      content: JSON.stringify(res.data, null, 1900),
-      ephemeral: true,
-    });
+    if (interaction.isRepliable()) {
+      return interaction.reply({
+        content: "Failed to load dashboard",
+        flags: 64,
+      });
+    }
   }
 });
 
-client.login(process.env.TOKEN);
+/* =========================================================
+   GLOBAL ERROR HANDLERS (PREVENT CRASHES)
+========================================================= */
+
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled promise rejection:", err);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+
+/* =========================================================
+   START BOT
+========================================================= */
+
+client.login(TOKEN);
