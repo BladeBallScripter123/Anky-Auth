@@ -1,5 +1,13 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
-const axios = require("axios");
+import {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  ChatInputCommandInteraction,
+} from "discord.js";
+import axios from "axios";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
@@ -8,47 +16,80 @@ const client = new Client({
 const API = "https://yo-bot--ankymacro1.replit.app";
 
 function headers() {
-  return { Authorization: process.env.ADMIN_KEY };
+  return { Authorization: process.env.ADMIN_KEY! };
 }
 
-/* ---------------- DASHBOARD ---------------- */
+/* ---------------- COMMAND SETUP ---------------- */
 
-client.once("ready", () => {
-  console.log("Admin bot online");
+const commands = [
+  new SlashCommandBuilder()
+    .setName("dashboard")
+    .setDescription("View live key system stats"),
+].map((c) => c.toJSON());
+
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN!);
+
+async function registerCommands() {
+  await rest.put(
+    Routes.applicationGuildCommands(
+      process.env.CLIENT_ID!,
+      process.env.GUILD_ID! // IMPORTANT FIX
+    ),
+    { body: commands }
+  );
+}
+
+/* ---------------- READY ---------------- */
+
+client.once("ready", async () => {
+  console.log(`Admin bot online: ${client.user?.tag}`);
+  await registerCommands();
 });
 
-/* ---------------- COMMAND ---------------- */
+/* ---------------- COMMAND HANDLER ---------------- */
 
-client.on("interactionCreate", async (i) => {
+client.on("interactionCreate", async (i: ChatInputCommandInteraction) => {
   if (!i.isChatInputCommand()) return;
+  if (i.commandName !== "dashboard") return;
 
-  /* ---- LIVE DASHBOARD ---- */
-  if (i.commandName === "dashboard") {
-    const [users, keys] = await Promise.all([
+  try {
+    const [usersRes, keysRes] = await Promise.all([
       axios.get(`${API}/admin/invites`, { headers: headers() }),
       axios.get(`${API}/admin/keys`, { headers: headers() }),
     ]);
+
+    const users = usersRes.data ?? [];
+    const keys = keysRes.data ?? [];
 
     const embed = new EmbedBuilder()
       .setTitle("📊 Live Key Dashboard")
       .addFields(
         {
           name: "Users",
-          value: `${users.data.length}`,
+          value: String(users.length),
+          inline: true,
         },
         {
           name: "Active Keys",
-          value: `${keys.data.filter(k => !k.revoked).length}`,
+          value: String(keys.filter((k: any) => !k.revoked && !k.expired).length),
+          inline: true,
         },
         {
           name: "Expired Keys",
-          value: `${keys.data.filter(k => k.expired).length}`,
+          value: String(keys.filter((k: any) => k.expired).length),
+          inline: true,
         }
       )
-      .setColor("Blue");
+      .setColor(0x3498db);
 
-    return i.reply({ embeds: [embed], ephemeral: true });
+    await i.reply({ embeds: [embed], ephemeral: true });
+  } catch (err) {
+    console.error(err);
+    await i.reply({
+      content: "Dashboard failed to load",
+      ephemeral: true,
+    });
   }
 });
 
-client.login(process.env.TOKEN);
+client.login(process.env.TOKEN!);
