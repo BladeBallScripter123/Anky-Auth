@@ -1,152 +1,113 @@
-import {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  InteractionReplyOptions,
-} from "discord.js";
-
+import { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } from "discord.js";
 import axios from "axios";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-/* =========================================================
-   ENV SAFETY
-========================================================= */
+const API = process.env.API_URL || "";
 
-const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const ADMIN_KEY = process.env.ADMIN_KEY;
-const API_URL = process.env.API_URL;
+/* ---------------- HEADERS ---------------- */
 
-if (!TOKEN) throw new Error("Missing TOKEN");
-if (!CLIENT_ID) throw new Error("Missing CLIENT_ID");
-if (!ADMIN_KEY) throw new Error("Missing ADMIN_KEY");
-if (!API_URL) throw new Error("Missing API_URL");
+function headers() {
+  return {
+    Authorization: process.env.ADMIN_SECRET || "",
+  };
+}
 
-/* =========================================================
-   AXIOS CLIENT
-========================================================= */
-
-const api = axios.create({
-  baseURL: API_URL,
-  timeout: 8000,
-  headers: {
-    Authorization: ADMIN_KEY,
-  },
-});
-
-/* =========================================================
-   SLASH COMMANDS
-========================================================= */
+/* ---------------- REGISTER COMMAND ---------------- */
 
 const commands = [
   new SlashCommandBuilder()
     .setName("dashboard")
     .setDescription("View live key system stats"),
-].map((c) => c.toJSON());
+  new SlashCommandBuilder()
+    .setName("getkey")
+    .setDescription("Get a license key")
+].map(c => c.toJSON());
 
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN || "");
 
-async function registerCommands() {
-  try {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), {
-      body: commands,
-    });
+async function register() {
+  if (!process.env.CLIENT_ID || !process.env.TOKEN) return;
 
-    console.log("Slash commands registered");
-  } catch (err) {
-    console.error("Command register failed:", err);
-  }
+  await rest.put(
+    Routes.applicationCommands(process.env.CLIENT_ID),
+    { body: commands }
+  );
 }
 
-/* =========================================================
-   BOT READY
-========================================================= */
+/* ---------------- READY ---------------- */
 
-client.once("ready", async () => {
-  console.log(`Bot online: ${client.user?.tag}`);
-  await registerCommands();
+client.once("clientReady", async () => {
+  console.log("Bot online");
+  await register();
 });
 
-/* =========================================================
-   DASHBOARD COMMAND
-========================================================= */
+/* ---------------- DASHBOARD ---------------- */
 
-client.on("interactionCreate", async (interaction) => {
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand()) return;
+
   try {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== "dashboard") return;
+    /* DASHBOARD */
+    if (i.commandName === "dashboard") {
+      const [usersRes, keysRes] = await Promise.all([
+        axios.get(`${API}/admin/invites`, { headers: headers() }),
+        axios.get(`${API}/admin/keys`, { headers: headers() }),
+      ]);
 
-    await interaction.deferReply({
-      ephemeral: true,
-    } as InteractionReplyOptions);
+      const users = usersRes.data || [];
+      const keys = keysRes.data || [];
 
-    const [usersRes, keysRes] = await Promise.all([
-      api.get("/admin/invites"),
-      api.get("/admin/keys"),
-    ]);
+      const embed = new EmbedBuilder()
+        .setTitle("📊 Live Key Dashboard")
+        .addFields(
+          { name: "Users", value: String(users.length), inline: true },
+          { name: "Active Keys", value: String(keys.filter((k: any) => !k.revoked).length), inline: true },
+          { name: "Total Keys", value: String(keys.length), inline: true },
+        )
+        .setColor(0x3498db);
 
-    const users = usersRes.data ?? [];
-    const keys = keysRes.data ?? [];
-
-    const activeKeys = keys.filter((k: any) => !k.revoked && !k.expired);
-    const expiredKeys = keys.filter((k: any) => k.expired);
-
-    const embed = new EmbedBuilder()
-      .setTitle("📊 Live Key Dashboard")
-      .setColor(0x3498db)
-      .addFields(
-        {
-          name: "Users",
-          value: String(users.length),
-          inline: true,
-        },
-        {
-          name: "Active Keys",
-          value: String(activeKeys.length),
-          inline: true,
-        },
-        {
-          name: "Expired Keys",
-          value: String(expiredKeys.length),
-          inline: true,
-        }
-      );
-
-    return interaction.editReply({
-      embeds: [embed],
-    });
-  } catch (err) {
-    console.error("Dashboard error:", err);
-
-    if (interaction.isRepliable()) {
-      return interaction.reply({
-        content: "Failed to load dashboard",
-        flags: 64,
-      });
+      return i.reply({
+        embeds: [embed],
+        ephemeral: true,
+      } as any);
     }
+
+    /* GET KEY */
+    if (i.commandName === "getkey") {
+      const res = await axios.get(`${API}/keys/unused`, {
+        headers: headers(),
+      });
+
+      const key = res.data?.key;
+
+      if (!key) {
+        return i.reply({ content: "No keys available", ephemeral: true } as any);
+      }
+
+      await axios.post(`${API}/keys/mark-used`, {
+        key,
+        userId: i.user.id,
+        username: i.user.username,
+      }, { headers: headers() });
+
+      return i.reply({
+        content: `Your key: ${key}`,
+        ephemeral: true,
+      } as any);
+    }
+
+  } catch (err) {
+    console.error(err);
+    return i.reply({
+      content: "API error",
+      ephemeral: true,
+    } as any);
   }
 });
 
-/* =========================================================
-   GLOBAL ERROR HANDLERS (PREVENT CRASHES)
-========================================================= */
+/* ---------------- START ---------------- */
 
-process.on("unhandledRejection", (err) => {
-  console.error("Unhandled promise rejection:", err);
-});
-
-process.on("uncaughtException", (err) => {
-  console.error("Uncaught exception:", err);
-});
-
-/* =========================================================
-   START BOT
-========================================================= */
-
-client.login(TOKEN);
+client.login(process.env.TOKEN || "");
