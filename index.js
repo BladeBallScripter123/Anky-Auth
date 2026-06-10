@@ -25,42 +25,42 @@ client.once('ready', async () => {
   }
 });
 
-// track invites
+const COOLDOWN = 7 * 24 * 60 * 60 * 1000;
+const lastClaim = new Map();
+
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'getkey') {
     const userId = interaction.user.id;
 
+    await interaction.deferReply({ ephemeral: true });
+
+    // whitelist check
+    if (!whitelist.has(userId)) {
+      return interaction.editReply('Invite 1 person first.');
+    }
+
+    const now = Date.now();
+    const last = lastClaim.get(userId) || 0;
+
+    if (now - last < COOLDOWN) {
+      const remaining = COOLDOWN - (now - last);
+      const hours = Math.ceil(remaining / (1000 * 60 * 60));
+
+      return interaction.editReply(`You must wait ${hours}h before using this again.`);
+    }
+
     try {
-      await interaction.deferReply({ ephemeral: true }); // <-- ADD THIS
-
-      if (!whitelist.has(userId)) {
-        return interaction.editReply({
-          content: 'Invite 1 person first.'
-        });
-      }
-
       const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
       const key = res.data[0];
 
-      await interaction.editReply({
-        content: `Your key: ${key}`
-      });
+      lastClaim.set(userId, now);
 
+      return interaction.editReply(`Your key: ${key}`);
     } catch (err) {
       console.error(err);
-
-      if (interaction.deferred) {
-        await interaction.editReply({
-          content: 'Error getting key.'
-        });
-      } else {
-        await interaction.reply({
-          content: 'Error getting key.',
-          ephemeral: true
-        });
-      }
+      return interaction.editReply('Error getting key.');
     }
   }
 });
