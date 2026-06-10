@@ -34,8 +34,10 @@ async function getKey() {
   return res.data?.key;
 }
 
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`Bot online as ${client.user.tag}`);
+
+  await registerCommands();
 });
 
 client.on("interactionCreate", async (interaction) => {
