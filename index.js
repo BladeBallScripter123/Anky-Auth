@@ -1,9 +1,11 @@
-const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const axios = require('axios');
 
 const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID; // your app ID
-const GUILD_ID = process.env.GUILD_ID; // your server ID
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
+
+const API_URL = 'https://yo-bot--ankymacro1.replit.app/api/keys/unused';
 
 const client = new Client({
   intents: [
@@ -38,15 +40,20 @@ client.on('interactionCreate', async (interaction) => {
 
   await interaction.deferReply({ ephemeral: true });
 
-  // OWNER ONLY OVERRIDE (does NOT affect invite system)
+  // OWNER ONLY OVERRIDE
   if (userId === OWNER_ID) {
-    const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
-    const key = res.data?.[0];
+    const res = await axios.get(API_URL, {
+      headers: {
+        authorization: process.env.ADMIN_KEY
+      }
+    });
 
-    return interaction.editReply(`Owner key: ${key}`);
+    const key = res.data?.key;
+
+    return interaction.editReply(`Owner key: ${key ?? "none available"}`);
   }
 
-  // NORMAL USERS BELOW
+  // NORMAL USERS
   if (!whitelist.has(userId)) {
     return interaction.editReply("Invite 1 person first.");
   }
@@ -58,8 +65,17 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.editReply("Cooldown active.");
   }
 
-  const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
-  const key = res.data?.[0];
+  const res = await axios.get(API_URL, {
+    headers: {
+      authorization: process.env.ADMIN_KEY
+    }
+  });
+
+  const key = res.data?.key;
+
+  if (!key) {
+    return interaction.editReply("No keys available.");
+  }
 
   lastClaim.set(userId, now);
 
