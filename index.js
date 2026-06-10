@@ -28,40 +28,58 @@ client.once('ready', async () => {
 const COOLDOWN = 7 * 24 * 60 * 60 * 1000;
 const lastClaim = new Map();
 
+const OWNER_ID = "1479872190563487969";
+
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === 'getkey') {
-    const userId = interaction.user.id;
+  if (interaction.commandName !== 'getkey') return;
 
-    await interaction.deferReply({ ephemeral: true });
+  const userId = interaction.user.id;
 
-    // whitelist check
-    if (!whitelist.has(userId)) {
-      return interaction.editReply('Invite 1 person first.');
+  await interaction.deferReply({ ephemeral: true });
+
+  // OWNER bypass
+  if (userId === OWNER_ID) {
+    const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
+    const key = res.data?.[0];
+
+    if (!key || key.includes("<")) {
+      return interaction.editReply("No valid key returned from backend.");
     }
 
-    const now = Date.now();
-    const last = lastClaim.get(userId) || 0;
+    return interaction.editReply(`Owner key: ${key}`);
+  }
 
-    if (now - last < COOLDOWN) {
-      const remaining = COOLDOWN - (now - last);
-      const hours = Math.ceil(remaining / (1000 * 60 * 60));
+  // whitelist check
+  if (!whitelist.has(userId)) {
+    return interaction.editReply("Invite 1 person first.");
+  }
 
-      return interaction.editReply(`You must wait ${hours}h before using this again.`);
+  // cooldown
+  const now = Date.now();
+  const last = lastClaim.get(userId) || 0;
+
+  if (now - last < COOLDOWN) {
+    const hours = Math.ceil((COOLDOWN - (now - last)) / 3600000);
+    return interaction.editReply(`Wait ${hours}h before using again.`);
+  }
+
+  try {
+    const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
+    const key = res.data?.[0];
+
+    // safety check (prevents "<" fake output issue)
+    if (!key || typeof key !== "string" || key.length < 5) {
+      return interaction.editReply("Backend returned invalid key.");
     }
 
-    try {
-      const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
-      const key = res.data[0];
+    lastClaim.set(userId, now);
 
-      lastClaim.set(userId, now);
-
-      return interaction.editReply(`Your key: ${key}`);
-    } catch (err) {
-      console.error(err);
-      return interaction.editReply('Error getting key.');
-    }
+    return interaction.editReply(`Your key: ${key}`);
+  } catch (err) {
+    console.error(err);
+    return interaction.editReply("Error getting key.");
   }
 });
 
