@@ -1,93 +1,84 @@
-const { Client, GatewayIntentBits } = require("discord.js");
-const crypto = require("crypto");
-const axios = require("axios");
+import { Client, GatewayIntentBits } from "discord.js";
+import axios from "axios";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-function sign(secret) {
-  const timestamp = Date.now().toString();
-  const payload = `${timestamp}.`;
+const API = process.env.API_URL as string;
 
-  const signature = crypto
-    .createHmac("sha256", secret)
-    .update(payload)
-    .digest("hex");
+/* ---------------- KEY SYSTEM ---------------- */
 
-  return { signature, timestamp };
+async function getKey(user: any) {
+  const res = await axios.get(`${API}/api/keys/unused`, {
+    headers: {
+      Authorization: process.env.BOT_SECRET as string,
+    },
+  });
+
+  const key = res.data?.key;
+
+  if (key) {
+    await axios.post(`${API}/api/keys/assign`, {
+      key,
+      userId: user.id,
+      username: user.username,
+    });
+  }
+
+  return key;
 }
 
-async function getKey() {
-  const { signature, timestamp } = sign(process.env.BOT_SECRET);
+/* ---------------- COMMAND HANDLER ---------------- */
 
-  const res = await axios.get(
-    "https://yo-bot--ankymacro1.replit.app/api/keys/unused",
-    {
-      headers: {
-        "x-signature": signature,
-        "x-timestamp": timestamp,
-      },
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand()) return;
+
+  /* /getkey */
+  if (i.commandName === "getkey") {
+    await i.deferReply({ flags: 64 });
+
+    try {
+      const key = await getKey(i.user);
+
+      if (!key) {
+        return i.editReply("No keys available.");
+      }
+
+      return i.editReply(`Key: ${key}`);
+    } catch (err) {
+      console.error(err);
+      return i.editReply("Error.");
     }
-  );
+  }
 
-  return res.data?.key;
-}
+  /* /dashboard */
+  if (i.commandName === "dashboard") {
+    await i.deferReply({ flags: 64 });
 
-client.once("ready", async () => {
-  console.log(`Bot online as ${client.user.tag}`);
+    try {
+      const res = await axios.get(`${API}/admin/stats`, {
+        headers: {
+          "x-admin-secret": process.env.ADMIN_SECRET as string,
+        },
+      });
 
-  await registerCommands();
-});
+      const data = res.data;
 
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "getkey") return;
-
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    const key = await getKey();
-
-    if (!key) {
-      return interaction.editReply("No keys available.");
+      return i.editReply(
+        `Total: ${data.total}\nUsed: ${data.used}\nUnused: ${data.unused}\nRevoked: ${data.revoked}`
+      );
+    } catch (err) {
+      console.error(err);
+      return i.editReply("Dashboard error.");
     }
-
-    return interaction.editReply(`Your key: ${key}`);
-  } catch (err) {
-    console.error("API error:", err?.response?.data || err.message);
-    return interaction.editReply("API error (owner request failed).");
   }
 });
 
-const { REST, Routes, SlashCommandBuilder } = require("discord.js");
+/* ---------------- READY ---------------- */
 
-async function registerCommands() {
-  const TOKEN = process.env.TOKEN;
-  const CLIENT_ID = process.env.CLIENT_ID;
-  const GUILD_ID = process.env.GUILD_ID;
-
-  const commands = [
-    new SlashCommandBuilder()
-      .setName("getkey")
-      .setDescription("Get a license key")
-      .toJSON(),
-  ];
-
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-  try {
-    console.log("Registering commands...");
-
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-      { body: commands }
-    );
-
-    console.log("Commands registered.");
-  } catch (err) {
-    console.error("Command register error:", err);
-  }
-}
+client.once("ready", () => {
+  console.log("Bot online");
+});
 
 client.login(process.env.TOKEN);
