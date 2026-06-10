@@ -1,96 +1,68 @@
 import {
   Client,
   GatewayIntentBits,
-  SlashCommandBuilder,
+  EmbedBuilder,
   REST,
   Routes,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
+  SlashCommandBuilder,
 } from "discord.js";
 import axios from "axios";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const API = process.env.API_URL!;
-const ADMIN_SECRET = process.env.ADMIN_SECRET!;
+const API = "https://yo-bot--ankymacro1.replit.app";
 
-let lastMessage: any = null;
-
-/* ---------------- COMMAND ---------------- */
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN!);
 
 const commands = [
   new SlashCommandBuilder()
     .setName("dashboard")
-    .setDescription("Live system dashboard"),
-].map(c => c.toJSON());
+    .setDescription("Live key system dashboard"),
+].map((c) => c.toJSON());
 
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN!);
-
-client.once("ready", async () => {
+async function register() {
   await rest.put(Routes.applicationCommands(process.env.CLIENT_ID!), {
     body: commands,
   });
-
-  console.log("Dashboard v2 ready");
-});
-
-/* ---------------- RENDER DASHBOARD ---------------- */
-
-async function buildDashboard() {
-  const res = await axios.get(`${API}/admin/summary`, {
-    headers: { "x-admin-secret": ADMIN_SECRET },
-  });
-
-  const d = res.data;
-
-  const embed = new EmbedBuilder()
-    .setTitle("📊 Live Dashboard v2")
-    .setColor(0x2b2d31)
-    .addFields(
-      { name: "Total Keys", value: String(d.totalKeys), inline: true },
-      { name: "Active", value: String(d.activeKeys), inline: true },
-      { name: "Expired", value: String(d.expiredKeys), inline: true },
-      { name: "Users", value: String(d.users), inline: true },
-      { name: "Invites", value: String(d.totalInvites), inline: true },
-    );
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("refresh")
-      .setLabel("Refresh")
-      .setStyle(ButtonStyle.Primary),
-  );
-
-  return { embeds: [embed], components: [row] };
 }
 
-/* ---------------- COMMAND HANDLER ---------------- */
+function headers() {
+  return { "x-admin-secret": process.env.ADMIN_SECRET! };
+}
 
-client.on("interactionCreate", async (i) => {
-  if (i.isChatInputCommand() && i.commandName === "dashboard") {
-    const msg = await buildDashboard();
-    const sent = await i.reply({ ...msg, ephemeral: true, fetchReply: true });
-
-    lastMessage = sent;
-  }
-
-  if (i.isButton() && i.customId === "refresh") {
-    const msg = await buildDashboard();
-    await i.update(msg);
-  }
+client.once("ready", async () => {
+  console.log("Bot online");
+  await register();
 });
 
-/* ---------------- AUTO REFRESH (LIVE FEEL) ---------------- */
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand()) return;
+  if (i.commandName !== "dashboard") return;
 
-setInterval(async () => {
-  if (!lastMessage) return;
+  const [dashRes, keysRes, invRes] = await Promise.all([
+    axios.get(`${API}/admin/dashboard`, { headers: headers() }),
+    axios.get(`${API}/admin/keys`, { headers: headers() }),
+    axios.get(`${API}/admin/invites/tree`, { headers: headers() }),
+  ]);
 
-  try {
-    const msg = await buildDashboard();
-    await lastMessage.edit(msg);
-  } catch {}
-}, 10000);
+  const dash = dashRes.data;
+  const keys = keysRes.data;
 
-client.login(process.env.TOKEN);
+  const embed = new EmbedBuilder()
+    .setTitle("📊 SYSTEM V3 DASHBOARD")
+    .addFields(
+      { name: "Users", value: String(dash.users), inline: true },
+      { name: "Active Keys", value: String(dash.keys.active), inline: true },
+      { name: "Expired Keys", value: String(dash.keys.expired), inline: true },
+      {
+        name: "Total Clicks",
+        value: String(dash.activity.clicks),
+        inline: true,
+      }
+    )
+    .setColor(0x00aaff);
+
+  await i.reply({ embeds: [embed], ephemeral: true });
+});
+
+client.login(process.env.TOKEN!);
