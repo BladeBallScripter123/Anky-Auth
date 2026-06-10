@@ -40,17 +40,22 @@ client.on('interactionCreate', async (interaction) => {
 
   await interaction.deferReply({ ephemeral: true });
 
-  // OWNER ONLY OVERRIDE
+  // OWNER ONLY
   if (userId === OWNER_ID) {
-    const res = await axios.get(API_URL, {
-      headers: {
-        authorization: process.env.ADMIN_KEY
-      }
-    });
+    try {
+      const res = await axios.get(API_URL, {
+        headers: {
+          authorization: process.env.ADMIN_KEY
+        }
+      });
 
-    const key = res.data?.key;
+      const key = res.data?.key;
 
-    return interaction.editReply(`Owner key: ${key ?? "none available"}`);
+      return interaction.editReply(`Owner key: ${key ?? "none available"}`);
+    } catch (err) {
+      console.error("Owner API error:", err?.response?.data || err.message);
+      return interaction.editReply("API error (owner request failed).");
+    }
   }
 
   // NORMAL USERS
@@ -65,13 +70,20 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.editReply("Cooldown active.");
   }
 
-  const res = await axios.get(API_URL, {
-    headers: {
-      authorization: process.env.ADMIN_KEY
-    }
-  });
+  let key;
 
-  const key = res.data?.key;
+  try {
+    const res = await axios.get(API_URL, {
+      headers: {
+        authorization: process.env.ADMIN_KEY
+      }
+    });
+
+    key = res.data?.key;
+  } catch (err) {
+    console.error("User API error:", err?.response?.data || err.message);
+    return interaction.editReply("API error. Try again later.");
+  }
 
   if (!key) {
     return interaction.editReply("No keys available.");
