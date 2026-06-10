@@ -1,70 +1,88 @@
-import { Client, GatewayIntentBits } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  EmbedBuilder,
+} from "discord.js";
 import axios from "axios";
-import crypto from "crypto";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-const API = "https://yo-bot--ankymacro1.replit.app";
+const API = process.env.API_URL!;
+const ADMIN_SECRET = process.env.ADMIN_SECRET!;
 
-/* ---------------- SIGN REQUEST ---------------- */
+/* ---------------- REGISTER ---------------- */
 
-function sign(secret?: string) {
-  if (!secret) throw new Error("BOT_SECRET missing");
+const commands = [
+  new SlashCommandBuilder()
+    .setName("getkey")
+    .setDescription("Get your key"),
+  new SlashCommandBuilder()
+    .setName("dashboard")
+    .setDescription("Admin dashboard"),
+].map(c => c.toJSON());
 
-  const timestamp = Date.now().toString();
-  const payload = `${timestamp}.`;
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN!);
 
-  const signature = crypto
-    .createHmac("sha256", secret)
-    .update(payload)
-    .digest("hex");
-
-  return { signature, timestamp };
-}
-
-/* ---------------- GET KEY ---------------- */
-
-async function getKey() {
-  const secret = process.env.BOT_SECRET;
-  const { signature, timestamp } = sign(secret);
-
-  const res = await axios.get(`${API}/api/keys/unused`, {
-    headers: {
-      "x-signature": signature,
-      "x-timestamp": timestamp,
-    },
-    timeout: 8000,
+client.once("ready", async () => {
+  await rest.put(Routes.applicationCommands(process.env.CLIENT_ID!), {
+    body: commands,
   });
 
-  return res.data?.key;
-}
+  console.log("Bot ready");
+});
 
-/* ---------------- COMMAND ---------------- */
+/* ---------------- COMMANDS ---------------- */
 
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
-  if (i.commandName !== "getkey") return;
 
-  await i.deferReply({ ephemeral: true });
+  /* GET KEY */
+  if (i.commandName === "getkey") {
+    const res = await axios.post(`${API}/keys/issue`, {
+      userId: i.user.id,
+    });
 
-  try {
-    const key = await getKey();
-
-    if (!key) {
-      return i.editReply("No keys available.");
-    }
-
-    return i.editReply(`Your key: ${key}`);
-  } catch (err: any) {
-    console.error("GETKEY ERROR:", err?.response?.data || err.message);
-    return i.editReply("API error (check backend or signature).");
+    return i.reply({
+      content: `Your key: ${res.data.key}`,
+      ephemeral: true,
+    });
   }
-});
 
-client.once("ready", () => {
-  console.log(`Bot online: ${client.user?.tag}`);
+  /* DASHBOARD */
+  if (i.commandName === "dashboard") {
+    const res = await axios.get(`${API}/admin/keys`, {
+      headers: { "x-admin-secret": ADMIN_SECRET },
+    });
+
+    const keys = res.data;
+
+    const embed = new EmbedBuilder()
+      .setTitle("Live Key Dashboard")
+      .addFields(
+        {
+          name: "Total Keys",
+          value: String(keys.length),
+          inline: true,
+        },
+        {
+          name: "Active",
+          value: String(keys.filter((k: any) => !k.expired && !k.revoked).length),
+          inline: true,
+        },
+        {
+          name: "Expired",
+          value: String(keys.filter((k: any) => k.expired).length),
+          inline: true,
+        }
+      );
+
+    return i.reply({ embeds: [embed], ephemeral: true });
+  }
 });
 
 client.login(process.env.TOKEN!);
