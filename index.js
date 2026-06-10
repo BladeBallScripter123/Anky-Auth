@@ -92,6 +92,8 @@ client.on('interactionCreate', async (interaction) => {
       });
     }
 
+    console.log("CLIENT_ID:", CLIENT_ID);
+  
     try {
       const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
       const key = res.data[0]; // adjust if needed
