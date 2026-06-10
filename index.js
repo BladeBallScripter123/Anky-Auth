@@ -1,13 +1,6 @@
-import {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  ChatInputCommandInteraction,
-} from "discord.js";
+import { Client, GatewayIntentBits } from "discord.js";
 import axios from "axios";
+import crypto from "crypto";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
@@ -15,81 +8,59 @@ const client = new Client({
 
 const API = "https://yo-bot--ankymacro1.replit.app";
 
-function headers() {
-  return { Authorization: process.env.ADMIN_KEY! };
+/* ---------------- SIGN REQUEST ---------------- */
+
+function sign(secret: string) {
+  const timestamp = Date.now().toString();
+  const payload = `${timestamp}.`;
+
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
+
+  return { signature, timestamp };
 }
 
-/* ---------------- COMMAND SETUP ---------------- */
+/* ---------------- GET KEY ---------------- */
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName("dashboard")
-    .setDescription("View live key system stats"),
-].map((c) => c.toJSON());
+async function getKey() {
+  const { signature, timestamp } = sign(process.env.BOT_SECRET!);
 
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN!);
+  const res = await axios.get(`${API}/api/keys/unused`, {
+    headers: {
+      "x-signature": signature,
+      "x-timestamp": timestamp,
+    },
+  });
 
-async function registerCommands() {
-  await rest.put(
-    Routes.applicationGuildCommands(
-      process.env.CLIENT_ID!,
-      process.env.GUILD_ID! // IMPORTANT FIX
-    ),
-    { body: commands }
-  );
+  return res.data?.key;
 }
 
-/* ---------------- READY ---------------- */
+/* ---------------- COMMAND ---------------- */
 
-client.once("ready", async () => {
-  console.log(`Admin bot online: ${client.user?.tag}`);
-  await registerCommands();
-});
-
-/* ---------------- COMMAND HANDLER ---------------- */
-
-client.on("interactionCreate", async (i: ChatInputCommandInteraction) => {
+client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
-  if (i.commandName !== "dashboard") return;
+  if (i.commandName !== "getkey") return;
+
+  await i.deferReply({ ephemeral: true });
 
   try {
-    const [usersRes, keysRes] = await Promise.all([
-      axios.get(`${API}/admin/invites`, { headers: headers() }),
-      axios.get(`${API}/admin/keys`, { headers: headers() }),
-    ]);
+    const key = await getKey();
 
-    const users = usersRes.data ?? [];
-    const keys = keysRes.data ?? [];
+    if (!key) {
+      return i.editReply("No keys available.");
+    }
 
-    const embed = new EmbedBuilder()
-      .setTitle("📊 Live Key Dashboard")
-      .addFields(
-        {
-          name: "Users",
-          value: String(users.length),
-          inline: true,
-        },
-        {
-          name: "Active Keys",
-          value: String(keys.filter((k: any) => !k.revoked && !k.expired).length),
-          inline: true,
-        },
-        {
-          name: "Expired Keys",
-          value: String(keys.filter((k: any) => k.expired).length),
-          inline: true,
-        }
-      )
-      .setColor(0x3498db);
-
-    await i.reply({ embeds: [embed], ephemeral: true });
+    return i.editReply(`Your key: ${key}`);
   } catch (err) {
     console.error(err);
-    await i.reply({
-      content: "Dashboard failed to load",
-      ephemeral: true,
-    });
+    return i.editReply("API error.");
   }
+});
+
+client.once("ready", () => {
+  console.log(`Bot online: ${client.user?.tag}`);
 });
 
 client.login(process.env.TOKEN!);
