@@ -32,55 +32,38 @@ const OWNER_ID = "1479872190563487969";
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-
   if (interaction.commandName !== 'getkey') return;
 
   const userId = interaction.user.id;
 
   await interaction.deferReply({ ephemeral: true });
 
-  // OWNER bypass
+  // OWNER ONLY OVERRIDE (does NOT affect invite system)
   if (userId === OWNER_ID) {
     const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
     const key = res.data?.[0];
 
-    if (!key || key.includes("<")) {
-      return interaction.editReply("No valid key returned from backend.");
-    }
-
     return interaction.editReply(`Owner key: ${key}`);
   }
 
-  // whitelist check
+  // NORMAL USERS BELOW
   if (!whitelist.has(userId)) {
     return interaction.editReply("Invite 1 person first.");
   }
 
-  // cooldown
   const now = Date.now();
   const last = lastClaim.get(userId) || 0;
 
   if (now - last < COOLDOWN) {
-    const hours = Math.ceil((COOLDOWN - (now - last)) / 3600000);
-    return interaction.editReply(`Wait ${hours}h before using again.`);
+    return interaction.editReply("Cooldown active.");
   }
 
-  try {
-    const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
-    const key = res.data?.[0];
+  const res = await axios.get('https://yo-bot--ankymacro1.replit.app/keys');
+  const key = res.data?.[0];
 
-    // safety check (prevents "<" fake output issue)
-    if (!key || typeof key !== "string" || key.length < 5) {
-      return interaction.editReply("Backend returned invalid key.");
-    }
+  lastClaim.set(userId, now);
 
-    lastClaim.set(userId, now);
-
-    return interaction.editReply(`Your key: ${key}`);
-  } catch (err) {
-    console.error(err);
-    return interaction.editReply("Error getting key.");
-  }
+  return interaction.editReply(`Your key: ${key}`);
 });
 
 client.login(TOKEN);
