@@ -58,4 +58,34 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+const { REST, Routes, SlashCommandBuilder } = require("discord.js");
+
+async function registerCommands() {
+  const TOKEN = process.env.TOKEN;
+  const CLIENT_ID = process.env.CLIENT_ID;
+  const GUILD_ID = process.env.GUILD_ID;
+
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("getkey")
+      .setDescription("Get a license key")
+      .toJSON(),
+  ];
+
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+  try {
+    console.log("Registering commands...");
+
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: commands }
+    );
+
+    console.log("Commands registered.");
+  } catch (err) {
+    console.error("Command register error:", err);
+  }
+}
+
 client.login(process.env.TOKEN);
