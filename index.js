@@ -10,7 +10,9 @@ const API = "https://yo-bot--ankymacro1.replit.app";
 
 /* ---------------- SIGN REQUEST ---------------- */
 
-function sign(secret: string) {
+function sign(secret?: string) {
+  if (!secret) throw new Error("BOT_SECRET missing");
+
   const timestamp = Date.now().toString();
   const payload = `${timestamp}.`;
 
@@ -25,13 +27,15 @@ function sign(secret: string) {
 /* ---------------- GET KEY ---------------- */
 
 async function getKey() {
-  const { signature, timestamp } = sign(process.env.BOT_SECRET!);
+  const secret = process.env.BOT_SECRET;
+  const { signature, timestamp } = sign(secret);
 
   const res = await axios.get(`${API}/api/keys/unused`, {
     headers: {
       "x-signature": signature,
       "x-timestamp": timestamp,
     },
+    timeout: 8000,
   });
 
   return res.data?.key;
@@ -53,9 +57,9 @@ client.on("interactionCreate", async (i) => {
     }
 
     return i.editReply(`Your key: ${key}`);
-  } catch (err) {
-    console.error(err);
-    return i.editReply("API error.");
+  } catch (err: any) {
+    console.error("GETKEY ERROR:", err?.response?.data || err.message);
+    return i.editReply("API error (check backend or signature).");
   }
 });
 
