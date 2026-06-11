@@ -15,32 +15,32 @@ const client = new Client({
 
 const API = process.env.API_URL;
 
-/* ---------------- SAFE REQUEST WRAPPER ---------------- */
+/* ---------------- SAFE API WRAPPER ---------------- */
 
-async function apiGet(url) {
+async function apiGet(url: string) {
   return axios.get(url, {
     headers: { "x-admin-secret": process.env.ADMIN_SECRET },
     timeout: 5000,
   });
 }
 
-async function apiPost(url, data) {
+async function apiPost(url: string, data: any) {
   return axios.post(url, data, {
     headers: { "x-admin-secret": process.env.ADMIN_SECRET },
     timeout: 5000,
   });
 }
 
-async function apiDelete(url) {
+async function apiDelete(url: string) {
   return axios.delete(url, {
     headers: { "x-admin-secret": process.env.ADMIN_SECRET },
     timeout: 5000,
   });
 }
 
-/* ---------------- GET KEY SYSTEM ---------------- */
+/* ---------------- GET KEY ---------------- */
 
-async function getKey(user) {
+async function getKey(user: any) {
   try {
     const res = await axios.get(`${API}/api/keys/unused`, {
       headers: { Authorization: process.env.BOT_SECRET },
@@ -61,8 +61,8 @@ async function getKey(user) {
     );
 
     return key;
-  } catch (err) {
-    console.log("GETKEY ERROR:", err.message);
+  } catch (err: any) {
+    console.log("GETKEY ERROR:", err?.message);
     return null;
   }
 }
@@ -70,29 +70,32 @@ async function getKey(user) {
 /* ---------------- INTERACTION HANDLER ---------------- */
 
 client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand() && !i.isButton() && !i.isStringSelectMenu())
-    return;
-
   try {
+    /* ---------------- SLASH COMMANDS ---------------- */
     if (i.isChatInputCommand()) {
-      if (!i.replied && !i.deferred) {
-        await i.deferReply({ flags: 64 });
+      if (!i.deferred && !i.replied) {
+        try {
+          await i.deferReply({ flags: 64 });
+        } catch {
+          return;
+        }
       }
 
-      /* ---------------- GETKEY ---------------- */
+      /* GETKEY */
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
+
         return i.editReply(
           key ? `Key: \`${key}\`` : "No keys available."
         );
       }
 
-      /* ---------------- KEYS PANEL ---------------- */
+      /* KEYS PANEL */
       if (i.commandName === "keys") {
         const res = await apiGet(`${API}/api/admin/keys`);
         const keys = res.data || [];
 
-        const options = keys.slice(0, 25).map((k) => ({
+        const options = keys.slice(0, 25).map((k: any) => ({
           label: k.key.slice(0, 20),
           description: k.revoked
             ? "REVOKED"
@@ -107,17 +110,17 @@ client.on("interactionCreate", async (i) => {
           .setColor(0x2b2d31)
           .setDescription("Select a key to manage it.");
 
-        const row = new ActionRowBuilder().addComponents(
+        const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId("key_select")
-            .setPlaceholder("Select a key")
+            .setPlaceholder("Select key")
             .addOptions(options)
         );
 
         return i.editReply({ embeds: [embed], components: [row] });
       }
 
-      /* ---------------- ACTIVITY ---------------- */
+      /* ACTIVITY */
       if (i.commandName === "activity") {
         const res = await apiGet(`${API}/api/admin/activity`);
         const logs = res.data || [];
@@ -129,8 +132,8 @@ client.on("interactionCreate", async (i) => {
             logs
               .slice(0, 10)
               .map(
-                (l) =>
-                  `**${l.event}**\nKey: \`${l.key ?? "none"}\`\n${l.createdAt}`
+                (l: any) =>
+                  `**${l.event}**\n\`${l.key ?? "none"}\`\n${l.createdAt}`
               )
               .join("\n\n") || "No activity"
           );
@@ -138,7 +141,7 @@ client.on("interactionCreate", async (i) => {
         return i.editReply({ embeds: [embed] });
       }
 
-      /* ---------------- DASHBOARD ---------------- */
+      /* DASHBOARD */
       if (i.commandName === "dashboard") {
         const res = await apiGet(`${API}/api/admin/stats`);
         const data = res.data || {};
@@ -162,7 +165,7 @@ client.on("interactionCreate", async (i) => {
       }
     }
 
-    /* ---------------- KEY SELECT ---------------- */
+    /* ---------------- SELECT MENU ---------------- */
     if (i.isStringSelectMenu() && i.customId === "key_select") {
       const key = i.values[0];
 
@@ -176,16 +179,12 @@ client.on("interactionCreate", async (i) => {
           { name: "Key", value: `\`${k.key}\`` },
           {
             name: "Status",
-            value: k.revoked
-              ? "REVOKED"
-              : k.used
-              ? "USED"
-              : "FREE",
+            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
           },
           { name: "HWID", value: k.hwid || "None" }
         );
 
-      const row = new ActionRowBuilder().addComponents(
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`copy_${k.key}`)
           .setLabel("Copy")
@@ -193,7 +192,7 @@ client.on("interactionCreate", async (i) => {
 
         new ButtonBuilder()
           .setCustomId(`revoke_${k.key}`)
-          .setLabel(k.revoked ? "Unrevoke" : "Revoke")
+          .setLabel("Revoke")
           .setStyle(ButtonStyle.Danger),
 
         new ButtonBuilder()
@@ -215,7 +214,7 @@ client.on("interactionCreate", async (i) => {
       return i.update({ embeds: [embed], components: [row] });
     }
 
-    /* ---------------- BUTTON ACTIONS ---------------- */
+    /* ---------------- BUTTONS ---------------- */
     if (i.isButton()) {
       const [action, key] = i.customId.split("_");
 
@@ -246,18 +245,20 @@ client.on("interactionCreate", async (i) => {
         return i.reply({ content: "HWID banned.", flags: 64 });
       }
     }
-  } catch (err) {
-    console.log("ERROR:", err.message);
+  } catch (err: any) {
+    console.log("BOT ERROR:", err?.message);
 
-    if (!i.replied) {
-      await i.reply({ content: "Error occurred.", flags: 64 }).catch(() => {});
-    }
+    try {
+      if (i.isRepliable() && !i.replied) {
+        await i.reply({ content: "Error occurred.", flags: 64 });
+      }
+    } catch {}
   }
 });
 
 /* ---------------- READY ---------------- */
 
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log("Bot online");
 });
 
