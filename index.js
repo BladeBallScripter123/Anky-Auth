@@ -13,7 +13,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-const API = process.env.API_URL!;
+const API = process.env.API_URL;
 const PAGE_SIZE = 10;
 
 /* ---------------- API ---------------- */
