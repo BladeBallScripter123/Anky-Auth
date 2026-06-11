@@ -21,24 +21,32 @@ const PAGE_SIZE = 10;
 const api = axios.create({
   baseURL: API,
   headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-  timeout: 5000,
 });
 
 /* ---------------- SAFE REPLY ---------------- */
 
-async function safeReply(i, data) {
+async function reply(i, data) {
   if (i.replied || i.deferred) return i.editReply(data);
   return i.reply(data);
 }
 
-/* ---------------- UI ---------------- */
+/* ---------------- VALIDATE KEY ---------------- */
 
-async function renderKeys(i, page = 0) {
+function cleanKey(k) {
+  if (!k) return null;
+  k = k.trim().toUpperCase();
+  if (k.length > 34) k = k.slice(0, 34);
+  return /^[A-Z0-9]{6}(-[A-Z0-9]{6}){4}$/.test(k) ? k : null;
+}
+
+/* ---------------- RENDER ---------------- */
+
+async function render(i, page = 0) {
   const res = await api.get("/api/admin/keys");
-  const keys = res.data || [];
+  const keys = res.data;
 
   const start = page * PAGE_SIZE;
-  const pageKeys = keys.slice(start, start + PAGE_SIZE);
+  const slice = keys.slice(start, start + PAGE_SIZE);
 
   const embed = new EmbedBuilder()
     .setTitle("🔑 Key Manager")
@@ -48,10 +56,10 @@ async function renderKeys(i, page = 0) {
     new StringSelectMenuBuilder()
       .setCustomId("select")
       .addOptions(
-        pageKeys.map((k) => ({
-          label: k.key.slice(0, 25),
-          description: k.used ? "USED" : "FREE",
+        slice.map((k) => ({
+          label: k.key,
           value: k.key,
+          description: k.used ? "USED" : "FREE",
         }))
       )
   );
@@ -70,7 +78,7 @@ async function renderKeys(i, page = 0) {
       .setDisabled(start + PAGE_SIZE >= keys.length)
   );
 
-  return safeReply(i, {
+  return reply(i, {
     embeds: [embed],
     components: [menu, nav],
     flags: 64,
@@ -82,7 +90,7 @@ async function renderKeys(i, page = 0) {
 async function getKey() {
   try {
     const res = await axios.get(`${API}/api/keys/unused`);
-    return res.data?.key || null;
+    return res.data.key;
   } catch {
     return null;
   }
@@ -95,14 +103,13 @@ client.on("interactionCreate", async (i) => {
     if (i.isChatInputCommand()) {
       if (i.commandName === "getkey") {
         await i.deferReply({ flags: 64 });
-
         const key = await getKey();
         return i.editReply(key ? `Key: \`${key}\`` : "No keys.");
       }
 
       if (i.commandName === "keys") {
         await i.deferReply({ flags: 64 });
-        return renderKeys(i, 0);
+        return render(i, 0);
       }
     }
 
@@ -112,29 +119,37 @@ client.on("interactionCreate", async (i) => {
 
       await i.deferUpdate();
 
-      if (dir === "next") return renderKeys(i, page + 1);
-      if (dir === "prev") return renderKeys(i, page - 1);
+      if (dir === "next") return render(i, page + 1);
+      if (dir === "prev") return render(i, page - 1);
     }
 
     if (i.isStringSelectMenu()) {
       await i.deferReply({ flags: 64 });
 
-      const key = i.values[0];
+      const key = cleanKey(i.values[0]);
 
-      const res = await api.get(`/api/admin/key/${key}`);
-      const k = res.data;
+      if (!key) {
+        return i.editReply("Invalid key");
+      }
 
-      const embed = new EmbedBuilder()
-        .setTitle("Key")
-        .addFields(
-          { name: "Key", value: k.key },
-          { name: "Status", value: k.used ? "USED" : "FREE" }
-        );
+      try {
+        const res = await api.get(`/api/admin/key/${key}`);
+        const k = res.data;
 
-      return i.editReply({ embeds: [embed] });
+        const embed = new EmbedBuilder()
+          .setTitle("Key Info")
+          .addFields(
+            { name: "Key", value: k.key },
+            { name: "Status", value: k.used ? "USED" : "FREE" }
+          );
+
+        return i.editReply({ embeds: [embed] });
+      } catch {
+        return i.editReply("Key not found");
+      }
     }
-  } catch (err) {
-    console.log(err);
+  } catch (e) {
+    console.log("ERR", e);
   }
 });
 
