@@ -18,7 +18,7 @@ const ADMIN = process.env.ADMIN_SECRET;
 
 const PAGE_SIZE = 10;
 
-/* ---------------- API ---------------- */
+/* ---------------- API CLIENT ---------------- */
 
 const api = axios.create({
   baseURL: API,
@@ -30,7 +30,7 @@ const api = axios.create({
 
 async function safeReply(i, payload) {
   try {
-    if (i.deferred || i.replied) return await i.editReply(payload);
+    if (i.deferred || i.replied) return await i.followUp(payload);
     return await i.reply(payload);
   } catch {
     try {
@@ -43,12 +43,10 @@ async function safeReply(i, payload) {
 
 /* ---------------- GET KEY ---------------- */
 
-async function getKey(user) {
+async function getKey() {
   try {
     const res = await axios.get(`${API}/api/keys/unused`);
-    const key = res.data?.key;
-    if (!key) return null;
-    return key;
+    return res.data?.key || null;
   } catch {
     return null;
   }
@@ -60,7 +58,6 @@ async function renderKeysUI(i, page = 0) {
   const res = await api.get("/api/admin/keys");
   const keys = Array.isArray(res.data) ? res.data : [];
 
-  const PAGE_SIZE = 10;
   const start = page * PAGE_SIZE;
   const pageKeys = keys.slice(start, start + PAGE_SIZE);
 
@@ -69,14 +66,14 @@ async function renderKeysUI(i, page = 0) {
     .setColor(0x2b2d31)
     .setDescription(
       `Page ${page + 1} • Total ${keys.length}\n\n` +
-      pageKeys
-        .map((k) => {
-          const hw = k.hwids?.length ? k.hwids.join(", ") : "None";
-          return `**${k.key}**\nStatus: ${
-            k.revoked ? "REVOKED" : k.used ? "USED" : "FREE"
-          }\nHWID: \`${hw.slice(0, 80)}\`\n`;
-        })
-        .join("\n")
+        pageKeys
+          .map((k) => {
+            const hw = k.hwid || "None";
+            return `**${k.key}**\nStatus: ${
+              k.revoked ? "REVOKED" : k.used ? "USED" : "FREE"
+            }\nHWID: \`${hw}\`\n`;
+          })
+          .join("\n")
     );
 
   const menu = new ActionRowBuilder().addComponents(
@@ -105,32 +102,26 @@ async function renderKeysUI(i, page = 0) {
       .setDisabled(start + PAGE_SIZE >= keys.length)
   );
 
-  // IMPORTANT FIX: ALWAYS UPDATE, NEVER REPLY AGAIN
   if (i.update) {
-    return i.update({
-      embeds: [embed],
-      components: [menu, nav],
-    });
+    return i.update({ embeds: [embed], components: [menu, nav] });
   }
 
-  return i.editReply({
-    embeds: [embed],
-    components: [menu, nav],
-  });
+  return i.editReply({ embeds: [embed], components: [menu, nav] });
 }
 
 /* ---------------- BOT ---------------- */
 
 client.on("interactionCreate", async (i) => {
   try {
-    /* ---------- COMMANDS ---------- */
+    /* ---------------- COMMANDS ---------------- */
+
     if (i.isChatInputCommand()) {
       if (!i.deferred && !i.replied) {
         await i.deferReply({ flags: 64 });
       }
 
       if (i.commandName === "getkey") {
-        const key = await getKey(i.user);
+        const key = await getKey();
         return safeReply(i, {
           content: key ? `Key: \`${key}\`` : "No keys available",
         });
@@ -141,13 +132,11 @@ client.on("interactionCreate", async (i) => {
       }
     }
 
-    /* ---------- SELECT ---------- */
-    if (i.isStringSelectMenu() && i.customId === "key_select") {
-      if (i.values[0] === "none") {
-        return safeReply(i, { content: "No keys", flags: 64 });
-      }
+    /* ---------------- SELECT MENU ---------------- */
 
-      const key = i.values[0];
+    if (i.isStringSelectMenu() && i.customId === "key_select") {
+      const key = i.values?.[0];
+      if (!key) return;
 
       const res = await api.get(`/api/admin/key/${key}`);
       const k = res.data;
@@ -159,34 +148,27 @@ client.on("interactionCreate", async (i) => {
           { name: "Key", value: `\`${k.key}\`` },
           {
             name: "Status",
-            value: k.revoked
-              ? "REVOKED"
-              : k.used
-              ? "USED"
-              : "FREE",
+            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
           },
           {
-            name: "HWIDs",
-            value:
-              k.hwids?.length > 0
-                ? k.hwids.join("\n")
-                : "None",
+            name: "HWID",
+            value: k.hwid || "None",
           }
         );
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`copy_${k.key}`)
+          .setCustomId(`copy:${k.key}`)
           .setLabel("Copy")
           .setStyle(ButtonStyle.Primary),
 
         new ButtonBuilder()
-          .setCustomId(`revoke_${k.key}`)
+          .setCustomId(`revoke:${k.key}`)
           .setLabel("Revoke")
           .setStyle(ButtonStyle.Danger),
 
         new ButtonBuilder()
-          .setCustomId(`delete_${k.key}`)
+          .setCustomId(`delete:${k.key}`)
           .setLabel("Delete")
           .setStyle(ButtonStyle.Danger),
 
@@ -199,12 +181,16 @@ client.on("interactionCreate", async (i) => {
       return i.update({ embeds: [embed], components: [row] });
     }
 
-    /* ---------- BUTTONS ---------- */
-    if (i.isButton()) {
-      const [action, ...rest] = i.customId.split("_");
-      const key = rest.join("_");
+    /* ---------------- BUTTONS ---------------- */
 
-      if (action === "back") return renderKeysUI(i, 0);
+    if (i.isButton()) {
+      const [action, keyRaw] = i.customId.split(":");
+      const key = keyRaw || "";
+
+      if (action === "back") {
+        if (!i.deferred && !i.replied) await i.deferUpdate();
+        return renderKeysUI(i, 0);
+      }
 
       if (action === "copy") {
         return safeReply(i, { content: `\`${key}\``, flags: 64 });
@@ -221,16 +207,15 @@ client.on("interactionCreate", async (i) => {
       }
 
       if (action === "page") {
-        const dir = rest[0];
-        const page = Number(rest[1]) || 0;
+        const dir = keyRaw;
+        const currentPage = Number(dir) || 0;
 
-        if (dir === "next") return renderKeysUI(i, page + 1);
-        if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
+        return renderKeysUI(i, currentPage);
       }
     }
   } catch (err) {
-    console.log("ERROR:", err?.message || err);
-    return safeReply(i, { content: "Error", flags: 64 });
+    console.log("BOT ERROR:", err?.response?.data || err.message);
+    return safeReply(i, { content: "Error occurred", flags: 64 });
   }
 });
 
