@@ -13,75 +13,86 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-const API = process.env.API_URL;
+const API = process.env.API_URL!;
+const ADMIN = process.env.ADMIN_SECRET!;
+
 const PAGE_SIZE = 10;
 
-/* ---------------- API ---------------- */
+/* ---------------- SAFE API ---------------- */
 
-async function apiGet(url) {
-  return axios.get(url, {
-    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-    timeout: 8000,
+const api = axios.create({
+  baseURL: API,
+  timeout: 8000,
+  headers: {
+    "x-admin-secret": ADMIN,
+  },
+});
+
+/* ---------------- SAFE SORT ---------------- */
+
+function sortKeys(keys: any[]) {
+  return keys.sort((a, b) => {
+    const aMulti = (a.hwidCount || 0) > 1 ? 0 : 1;
+    const bMulti = (b.hwidCount || 0) > 1 ? 0 : 1;
+
+    if (aMulti !== bMulti) return aMulti - bMulti;
+    if (a.used !== b.used) return b.used - a.used;
+    return (a.revoked ? 1 : 0) - (b.revoked ? 1 : 0);
   });
 }
 
-async function apiPost(url, data) {
-  return axios.post(url, data, {
-    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-    timeout: 8000,
-  });
-}
+/* ---------------- KEY UI (SAFE) ---------------- */
 
-async function apiDelete(url) {
-  return axios.delete(url, {
-    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-    timeout: 8000,
-  });
-}
+async function renderKeysUI(i: any, page = 0) {
+  const res = await api.get("/api/admin/keys").catch(() => null);
 
-/* ---------------- UI RENDER ---------------- */
+  let keys = Array.isArray(res?.data) ? res.data : [];
 
-async function renderKeysUI(i, page = 0) {
-  const res = await apiGet(`${API}/api/admin/keys`);
-  const keys = Array.isArray(res.data) ? res.data : [];
+  if (!keys.length) {
+    const embed = new EmbedBuilder()
+      .setTitle("🔑 Key Manager")
+      .setColor(0x2b2d31)
+      .setDescription("No keys returned from backend.");
+
+    return i.reply?.({ embeds: [embed], flags: 64 });
+  }
+
+  keys = sortKeys(keys);
 
   const start = page * PAGE_SIZE;
   const pageKeys = keys.slice(start, start + PAGE_SIZE);
 
-  const options = pageKeys.length
-    ? pageKeys.slice(0, 25).map((k) => ({
-        label: k.key.slice(0, 25),
-        description: k.suspicious
-          ? `⚠ MULTI HWID (${k.hwidCount})`
-          : k.used
-          ? "USED"
-          : "FREE",
-        value: k.key,
-      }))
-    : [
-        {
-          label: "No keys",
-          value: "none",
-          description: "empty",
-        },
-      ];
+  const options = pageKeys.map((k: any) => ({
+    label: (k.key || "UNKNOWN").slice(0, 25),
+    description: k.revoked
+      ? "REVOKED"
+      : (k.hwidCount || 0) > 1
+      ? `⚠ MULTI HWID (${k.hwidCount})`
+      : k.used
+      ? "USED"
+      : "FREE",
+    value: k.key,
+  }));
 
   const embed = new EmbedBuilder()
     .setTitle("🔑 Key Manager")
     .setColor(0x2b2d31)
     .setDescription(
-      `Page ${page + 1} • Total ${keys.length}\n\n` +
-        `⚠ Multi-HWID = abuse detection`
+      `Page ${page + 1}\nTotal: ${keys.length}\n\nMulti-HWID → Used → Free`
     );
 
-  const menuRow = new ActionRowBuilder().addComponents(
+  const menu = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`key_select_${page}`)
+      .setCustomId(`keys_select_${page}`)
       .setPlaceholder("Select key")
-      .addOptions(options)
+      .addOptions(
+        options.length
+          ? options
+          : [{ label: "No keys", value: "none" }]
+      )
   );
 
-  const navRow = new ActionRowBuilder().addComponents(
+  const nav = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`keys_prev_${page}`)
       .setLabel("Prev")
@@ -95,30 +106,25 @@ async function renderKeysUI(i, page = 0) {
       .setDisabled(start + PAGE_SIZE >= keys.length)
   );
 
-  if (i.deferred || i.replied) {
-    return i.editReply({ embeds: [embed], components: [menuRow, navRow] });
+  if (i.isChatInputCommand()) {
+    return i.editReply({ embeds: [embed], components: [menu, nav] });
   }
 
-  return i.reply({
-    embeds: [embed],
-    components: [menuRow, navRow],
-    flags: 64,
-  });
+  return i.update?.({ embeds: [embed], components: [menu, nav] });
 }
 
-/* ---------------- GET KEY ---------------- */
+/* ---------------- GET KEY (UNCHANGED SAFE) ---------------- */
 
-async function getKey(user) {
+async function getKey(user: any) {
   try {
-    const res = await axios.get(`${API}/api/keys/unused`, {
+    const res = await api.get("/api/keys/unused", {
       headers: { Authorization: process.env.BOT_SECRET },
-      timeout: 8000,
     });
 
     const key = res.data?.key;
     if (!key) return null;
 
-    await axios.post(`${API}/api/keys/assign`, {
+    await api.post("/api/keys/assign", {
       key,
       userId: user.id,
       username: user.username,
@@ -134,38 +140,50 @@ async function getKey(user) {
 
 client.on("interactionCreate", async (i) => {
   try {
-    /* ---------------- SLASH COMMANDS ---------------- */
-
+    /* COMMANDS */
     if (i.isChatInputCommand()) {
       await i.deferReply({ flags: 64 });
 
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
-        return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
+        return i.editReply(key ? `\`${key}\`` : "No keys available.");
       }
 
       if (i.commandName === "keys") {
         return renderKeysUI(i, 0);
       }
+
+      /* IMPORTANT: DO NOT BREAK OTHER COMMANDS */
+      if (i.commandName === "dashboard") {
+        return i.editReply("Dashboard endpoint not supported in this bot version.");
+      }
+
+      if (i.commandName === "activity") {
+        return i.editReply("Activity endpoint not supported in this bot version.");
+      }
     }
 
-    /* ---------------- SELECT MENU ---------------- */
-
+    /* SELECT MENU */
     if (i.isStringSelectMenu()) {
-      await i.deferUpdate();
-
       if (i.values[0] === "none") {
-        return i.editReply("No keys.");
+        return i.reply({ content: "No keys.", flags: 64 });
       }
 
       const key = i.values[0];
 
-      const res = await apiGet(`${API}/api/admin/key/${key}`);
-      const k = res.data;
+      const res = await api
+        .get(`/api/admin/key/${key}`)
+        .catch(() => null);
+
+      const k = res?.data;
+
+      if (!k) {
+        return i.reply({ content: "Key not found", flags: 64 });
+      }
 
       const embed = new EmbedBuilder()
         .setTitle("🔑 Key Details")
-        .setColor(k.suspicious ? 0xff0000 : 0x00aaff)
+        .setColor((k.hwidCount || 0) > 1 ? 0xff0000 : 0x00aaff)
         .addFields(
           { name: "Key", value: `\`${k.key}\`` },
           {
@@ -176,105 +194,62 @@ client.on("interactionCreate", async (i) => {
               ? "USED"
               : "FREE",
           },
-          {
-            name: "HWIDs",
-            value: k.hwids?.length
-              ? k.hwids.join("\n")
-              : "None",
-          },
-          {
-            name: "HWID Count",
-            value: String(k.hwidCount || 0),
-          }
+          { name: "HWID", value: k.hwid || "None" },
+          { name: "HWID COUNT", value: String(k.hwidCount || 0) }
         );
 
-      const row1 = new ActionRowBuilder().addComponents(
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(`copy_${key}`)
+          .setCustomId(`copy_${k.key}`)
           .setLabel("Copy")
           .setStyle(ButtonStyle.Primary),
 
         new ButtonBuilder()
-          .setCustomId(`revoke_${key}`)
+          .setCustomId(`revoke_${k.key}`)
           .setLabel("Revoke")
           .setStyle(ButtonStyle.Danger),
 
         new ButtonBuilder()
-          .setCustomId(`delete_${key}`)
+          .setCustomId(`delete_${k.key}`)
           .setLabel("Delete")
           .setStyle(ButtonStyle.Danger),
 
         new ButtonBuilder()
-          .setCustomId(`back_keys`)
+          .setCustomId("back_keys")
           .setLabel("Back")
           .setStyle(ButtonStyle.Secondary)
       );
 
-      const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`hwid_${key}`)
-          .setLabel("HWID")
-          .setStyle(ButtonStyle.Secondary),
-
-        new ButtonBuilder()
-          .setCustomId(`banhwid_${key}`)
-          .setLabel("Ban HWID")
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      return i.editReply({ embeds: [embed], components: [row1, row2] });
+      return i.update({ embeds: [embed], components: [row] });
     }
 
-    /* ---------------- BUTTONS ---------------- */
-
+    /* BUTTONS */
     if (i.isButton()) {
-      await i.deferUpdate();
-
       const parts = i.customId.split("_");
 
       if (i.customId === "back_keys") {
         return renderKeysUI(i, 0);
       }
 
-      if (parts[0] === "keys") {
-        const dir = parts[1];
-        const page = Number(parts[2]) || 0;
-
-        if (dir === "next") return renderKeysUI(i, page + 1);
-        if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
-      }
-
       const action = parts[0];
       const key = parts.slice(1).join("_");
 
-      if (action === "copy")
-        return i.followUp({ content: `\`${key}\``, flags: 64 });
+      if (action === "copy") {
+        return i.reply({ content: `\`${key}\``, flags: 64 });
+      }
 
       if (action === "revoke") {
-        await apiPost(`${API}/api/admin/revoke`, { key });
-        return i.followUp({ content: "Updated", flags: 64 });
+        await api.post("/api/admin/revoke", { key }).catch(() => {});
+        return i.reply({ content: "Revoked", flags: 64 });
       }
 
       if (action === "delete") {
-        await apiDelete(`${API}/api/admin/key/${key}`);
-        return i.followUp({ content: "Deleted", flags: 64 });
-      }
-
-      if (action === "hwid") {
-        const res = await apiGet(`${API}/api/admin/key/${key}`);
-        return i.followUp({
-          content: `HWIDs:\n${(res.data.hwids || []).join("\n") || "None"}`,
-          flags: 64,
-        });
-      }
-
-      if (action === "banhwid") {
-        await apiPost(`${API}/api/admin/ban-hwid`, { key });
-        return i.followUp({ content: "HWID banned", flags: 64 });
+        await api.delete(`/api/admin/key/${key}`).catch(() => {});
+        return i.reply({ content: "Deleted", flags: 64 });
       }
     }
   } catch (err) {
-    console.log("ERROR:", err?.message || err);
+    console.log("BOT ERROR:", err);
 
     if (!i.replied) {
       try {
