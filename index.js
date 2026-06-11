@@ -14,27 +14,37 @@ const client = new Client({
 
 const API = process.env.API_URL;
 
-/* ---------------- KEY SYSTEM ---------------- */
-
 async function getKey(user) {
-  const res = await axios.get(`${API}/api/keys/unused`, {
-    headers: { Authorization: process.env.BOT_SECRET },
-  });
+  try {
+    if (!process.env.API_URL) return null;
 
-  const key = res.data?.key;
-
-  if (key) {
-    await axios.post(`${API}/api/keys/assign`, {
-      key,
-      userId: user.id,
-      username: user.username,
+    const res = await axios.get(`${process.env.API_URL}/api/keys/unused`, {
+      headers: {
+        Authorization: process.env.BOT_SECRET,
+      },
+      timeout: 5000,
     });
+
+    const key = res.data?.key;
+
+    if (!key) return null;
+
+    await axios.post(
+      `${process.env.API_URL}/api/keys/assign`,
+      {
+        key,
+        userId: user.id,
+        username: user.username,
+      },
+      { timeout: 5000 }
+    );
+
+    return key;
+  } catch (err) {
+    console.log("GETKEY ERROR:", err?.message || err);
+    return null;
   }
-
-  return key;
 }
-
-/* ---------------- PAGINATED KEYS ---------------- */
 
 function buildKeysEmbed(keys, page, totalPages) {
   return new EmbedBuilder()
