@@ -16,142 +16,219 @@ const client = new Client({
 const API = process.env.API_URL;
 const PAGE_SIZE = 10;
 
-/* ---------------- API ---------------- */
+/* ---------------- HELPERS ---------------- */
 
-const api = axios.create({
-  baseURL: API,
-  headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-});
-
-/* ---------------- SAFE REPLY ---------------- */
-
-async function reply(i, data) {
-  if (i.replied || i.deferred) return i.editReply(data);
-  return i.reply(data);
+function encodeKey(key) {
+  return Buffer.from(key).toString("base64");
 }
 
-/* ---------------- VALIDATE KEY ---------------- */
-
-function cleanKey(k) {
-  if (!k) return null;
-  k = k.trim().toUpperCase();
-  if (k.length > 34) k = k.slice(0, 34);
-  return /^[A-Z0-9]{6}(-[A-Z0-9]{6}){4}$/.test(k) ? k : null;
+function decodeKey(encoded) {
+  return Buffer.from(encoded, "base64").toString("utf8");
 }
 
-/* ---------------- RENDER ---------------- */
+async function apiGet(url) {
+  return axios.get(`${API}${url}`, {
+    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
+    timeout: 5000,
+  });
+}
 
-async function render(i, page = 0) {
-  const res = await api.get("/api/admin/keys");
-  const keys = res.data;
+async function apiPost(url, data) {
+  return axios.post(`${API}${url}`, data, {
+    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
+    timeout: 5000,
+  });
+}
+
+async function apiDelete(url) {
+  return axios.delete(`${API}${url}`, {
+    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
+    timeout: 5000,
+  });
+}
+
+async function safeReply(i, payload) {
+  try {
+    if (i.replied || i.deferred) return await i.editReply(payload);
+    return await i.reply(payload);
+  } catch {
+    try {
+      return await i.followUp(payload);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/* ---------------- UI ---------------- */
+
+async function renderKeysUI(i, page = 0) {
+  const res = await apiGet("/api/admin/keys");
+  const keys = Array.isArray(res.data) ? res.data : [];
 
   const start = page * PAGE_SIZE;
-  const slice = keys.slice(start, start + PAGE_SIZE);
+  const pageKeys = keys.slice(start, start + PAGE_SIZE);
+
+  const options = pageKeys.slice(0, 25).map((k) => ({
+    label: k.key.slice(0, 25),
+    description: k.revoked
+      ? "🔴 REVOKED"
+      : k.used
+      ? "🟠 USED"
+      : "🟢 FREE",
+    value: k.key,
+  }));
 
   const embed = new EmbedBuilder()
     .setTitle("🔑 Key Manager")
+    .setColor(0x2b2d31)
     .setDescription(`Page ${page + 1} • Total ${keys.length}`);
 
   const menu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId("select")
+      .setCustomId("key_select")
+      .setPlaceholder("Select key")
       .addOptions(
-        slice.map((k) => ({
-          label: k.key,
-          value: k.key,
-          description: k.used ? "USED" : "FREE",
-        }))
+        options.length ? options : [{ label: "No keys", value: "none" }]
       )
   );
 
   const nav = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`prev_${page}`)
+      .setCustomId(`keys_prev_${page}`)
       .setLabel("Prev")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(page === 0),
 
     new ButtonBuilder()
-      .setCustomId(`next_${page}`)
+      .setCustomId(`keys_next_${page}`)
       .setLabel("Next")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(start + PAGE_SIZE >= keys.length)
   );
 
-  return reply(i, {
-    embeds: [embed],
-    components: [menu, nav],
-    flags: 64,
-  });
+  return safeReply(i, { embeds: [embed], components: [menu, nav], flags: 64 });
 }
 
 /* ---------------- GET KEY ---------------- */
 
-async function getKey() {
+async function getKey(user) {
   try {
     const res = await axios.get(`${API}/api/keys/unused`);
-    return res.data.key;
+    return res.data?.key || null;
   } catch {
     return null;
   }
 }
 
-/* ---------------- EVENTS ---------------- */
+/* ---------------- BOT ---------------- */
 
 client.on("interactionCreate", async (i) => {
   try {
+    /* COMMANDS */
     if (i.isChatInputCommand()) {
+      await i.deferReply({ flags: 64 });
+
       if (i.commandName === "getkey") {
-        await i.deferReply({ flags: 64 });
-        const key = await getKey();
-        return i.editReply(key ? `Key: \`${key}\`` : "No keys.");
+        const key = await getKey(i.user);
+        return safeReply(i, {
+          content: key ? `Key: \`${key}\`` : "No keys available.",
+        });
       }
 
       if (i.commandName === "keys") {
-        await i.deferReply({ flags: 64 });
-        return render(i, 0);
+        return renderKeysUI(i, 0);
       }
     }
 
+    /* SELECT MENU */
+    if (i.isStringSelectMenu() && i.customId === "key_select") {
+      if (i.values[0] === "none") {
+        return safeReply(i, { content: "No keys.", flags: 64 });
+      }
+
+      const key = i.values[0];
+      const res = await apiGet(`/api/admin/key/${key}`);
+      const k = res.data;
+
+      const embed = new EmbedBuilder()
+        .setTitle("🔑 Key Details")
+        .setColor(0x00aaff)
+        .addFields(
+          { name: "Key", value: `\`${k.key}\`` },
+          {
+            name: "Status",
+            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
+          },
+          { name: "HWID", value: k.hwid || "None" }
+        );
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`copy_${encodeKey(k.key)}`)
+          .setLabel("Copy")
+          .setStyle(ButtonStyle.Primary),
+
+        new ButtonBuilder()
+          .setCustomId(`revoke_${encodeKey(k.key)}`)
+          .setLabel("Revoke")
+          .setStyle(ButtonStyle.Danger),
+
+        new ButtonBuilder()
+          .setCustomId(`delete_${encodeKey(k.key)}`)
+          .setLabel("Delete")
+          .setStyle(ButtonStyle.Danger),
+
+        new ButtonBuilder()
+          .setCustomId("back_keys")
+          .setLabel("Back")
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return i.update({ embeds: [embed], components: [row] });
+    }
+
+    /* BUTTONS */
     if (i.isButton()) {
-      const [dir, pageStr] = i.customId.split("_");
-      const page = Number(pageStr);
+      const id = i.customId;
 
-      await i.deferUpdate();
-
-      if (dir === "next") return render(i, page + 1);
-      if (dir === "prev") return render(i, page - 1);
-    }
-
-    if (i.isStringSelectMenu()) {
-      await i.deferReply({ flags: 64 });
-
-      const key = cleanKey(i.values[0]);
-
-      if (!key) {
-        return i.editReply("Invalid key");
+      if (id === "back_keys") {
+        return renderKeysUI(i, 0);
       }
 
-      try {
-        const res = await api.get(`/api/admin/key/${key}`);
-        const k = res.data;
+      const [action, encoded] = id.split("_");
+      const key = decodeKey(encoded);
 
-        const embed = new EmbedBuilder()
-          .setTitle("Key Info")
-          .addFields(
-            { name: "Key", value: k.key },
-            { name: "Status", value: k.used ? "USED" : "FREE" }
-          );
+      if (action === "copy") {
+        return safeReply(i, { content: `\`${key}\``, flags: 64 });
+      }
 
-        return i.editReply({ embeds: [embed] });
-      } catch {
-        return i.editReply("Key not found");
+      if (action === "revoke") {
+        await apiPost("/api/admin/revoke", { key });
+        return safeReply(i, { content: "Revoked", flags: 64 });
+      }
+
+      if (action === "delete") {
+        await apiDelete(`/api/admin/key/${key}`);
+        return safeReply(i, { content: "Deleted", flags: 64 });
+      }
+
+      /* pagination */
+      if (action === "keys") {
+        const dir = encoded;
+        const page = Number(id.split("_")[2]) || 0;
+
+        if (dir === "next") return renderKeysUI(i, page + 1);
+        if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
       }
     }
-  } catch (e) {
-    console.log("ERR", e);
+  } catch (err) {
+    console.log("ERROR:", err?.message || err);
+    return safeReply(i, { content: "Error", flags: 64 });
   }
 });
+
+/* ---------------- READY ---------------- */
 
 client.once("clientReady", () => {
   console.log("Bot online");
