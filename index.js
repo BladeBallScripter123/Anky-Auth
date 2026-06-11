@@ -15,7 +15,7 @@ const client = new Client({
 
 const API = process.env.API_URL;
 
-/* ---------------- SAFE API ---------------- */
+/* ---------------- API ---------------- */
 
 async function apiGet(url) {
   return axios.get(url, {
@@ -38,6 +38,62 @@ async function apiDelete(url) {
   });
 }
 
+/* ---------------- STATE ---------------- */
+
+const PAGE_SIZE = 10;
+
+/* ---------------- KEY UI ---------------- */
+
+async function renderKeysUI(i, page = 0) {
+  const res = await apiGet(`${API}/api/admin/keys`);
+  const keys = res.data || [];
+
+  const start = page * PAGE_SIZE;
+  const pageKeys = keys.slice(start, start + PAGE_SIZE);
+
+  const options = pageKeys.map((k) => ({
+    label: k.key.slice(0, 25),
+    description: k.revoked
+      ? "REVOKED"
+      : k.used
+      ? "USED"
+      : "FREE",
+    value: k.key,
+  }));
+
+  const embed = new EmbedBuilder()
+    .setTitle("🔑 Key Manager")
+    .setColor(0x2b2d31)
+    .setDescription(
+      `Page **${page + 1}**\nTotal: **${keys.length}**`
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("key_select")
+      .setPlaceholder("Select key")
+      .addOptions(options.length ? options : [
+        { label: "No keys", value: "none" }
+      ])
+  );
+
+  const nav = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`keys_prev_${page}`)
+      .setLabel("⬅ Prev")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === 0),
+
+    new ButtonBuilder()
+      .setCustomId(`keys_next_${page}`)
+      .setLabel("Next ➡")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(start + PAGE_SIZE >= keys.length)
+  );
+
+  return i.update({ embeds: [embed], components: [row, nav] });
+}
+
 /* ---------------- GET KEY ---------------- */
 
 async function getKey(user) {
@@ -57,8 +113,7 @@ async function getKey(user) {
     });
 
     return key;
-  } catch (err) {
-    console.log("GETKEY ERROR:", err.message);
+  } catch (e) {
     return null;
   }
 }
@@ -67,55 +122,21 @@ async function getKey(user) {
 
 client.on("interactionCreate", async (i) => {
   try {
-    if (!i.isChatInputCommand() && !i.isButton() && !i.isStringSelectMenu())
-      return;
-
+    /* ---------------- COMMANDS ---------------- */
     if (i.isChatInputCommand()) {
-      if (!i.deferred && !i.replied) {
-        try {
-          await i.deferReply({ flags: 64 });
-        } catch {}
-      }
+      if (!i.deferred) await i.deferReply({ flags: 64 });
 
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
-        return i.editReply(
-          key ? `Key: \`${key}\`` : "No keys available."
-        );
+        return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
       }
 
       if (i.commandName === "keys") {
-        const res = await apiGet(`${API}/api/admin/keys`);
-        const keys = res.data || [];
-
-        const options = keys.slice(0, 25).map((k) => ({
-          label: k.key.slice(0, 20),
-          description: k.revoked
-            ? "REVOKED"
-            : k.used
-            ? "USED"
-            : "FREE",
-          value: k.key,
-        }));
-
-        const embed = new EmbedBuilder()
-          .setTitle("Key Manager")
-          .setColor(0x2b2d31)
-          .setDescription("Select a key");
-
-        const row = new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId("key_select")
-            .setPlaceholder("Select key")
-            .addOptions(options)
-        );
-
-        return i.editReply({ embeds: [embed], components: [row] });
+        return renderKeysUI(i, 0);
       }
     }
 
-    /* ---------------- SELECT ---------------- */
-
+    /* ---------------- SELECT KEY ---------------- */
     if (i.isStringSelectMenu() && i.customId === "key_select") {
       const key = i.values[0];
 
@@ -123,7 +144,7 @@ client.on("interactionCreate", async (i) => {
       const k = res.data;
 
       const embed = new EmbedBuilder()
-        .setTitle("Key Details")
+        .setTitle("🔑 Key Details")
         .setColor(0x00aaff)
         .addFields(
           { name: "Key", value: `\`${k.key}\`` },
@@ -158,17 +179,40 @@ client.on("interactionCreate", async (i) => {
         new ButtonBuilder()
           .setCustomId(`banhwid_${k.key}`)
           .setLabel("Ban HWID")
-          .setStyle(ButtonStyle.Danger)
+          .setStyle(ButtonStyle.Danger),
+
+        new ButtonBuilder()
+          .setCustomId("back_keys")
+          .setLabel("Back")
+          .setStyle(ButtonStyle.Secondary)
       );
 
       return i.update({ embeds: [embed], components: [row] });
     }
 
-    /* ---------------- BUTTONS ---------------- */
-
+    /* ---------------- NAVIGATION ---------------- */
     if (i.isButton()) {
-      const [action, key] = i.customId.split("_");
+      const [action, key, page] = i.customId.split("_");
 
+      /* BACK */
+      if (i.customId === "back_keys") {
+        return renderKeysUI(i, 0);
+      }
+
+      /* PAGINATION */
+      if (action === "keys") {
+        const pageNum = parseInt(page);
+
+        if (key === "next") {
+          return renderKeysUI(i, pageNum + 1);
+        }
+
+        if (key === "prev") {
+          return renderKeysUI(i, Math.max(pageNum - 1, 0));
+        }
+      }
+
+      /* KEY ACTIONS */
       if (action === "copy") {
         return i.reply({ content: `\`${key}\``, flags: 64 });
       }
