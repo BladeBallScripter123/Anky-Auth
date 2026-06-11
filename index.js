@@ -57,63 +57,66 @@ async function getKey(user) {
 /* ---------------- RENDER UI ---------------- */
 
 async function renderKeysUI(i, page = 0) {
-  try {
-    const res = await api.get("/api/admin/keys");
-    const keys = Array.isArray(res.data) ? res.data : [];
+  const res = await api.get("/api/admin/keys");
+  const keys = Array.isArray(res.data) ? res.data : [];
 
-    const start = page * PAGE_SIZE;
-    const pageKeys = keys.slice(start, start + PAGE_SIZE);
+  const PAGE_SIZE = 10;
+  const start = page * PAGE_SIZE;
+  const pageKeys = keys.slice(start, start + PAGE_SIZE);
 
-    const options = pageKeys.map((k) => ({
-      label: k.key.slice(0, 25),
-      description:
-        k.hwidCount >= 2
-          ? `MULTI (${k.hwidCount})`
-          : k.used
-          ? "USED"
-          : "FREE",
-      value: k.key,
-    }));
-
-    const embed = new EmbedBuilder()
-      .setTitle("🔑 Key Manager")
-      .setColor(0x2b2d31)
-      .setDescription(`Page ${page + 1} • Total ${keys.length}`);
-
-    const menu = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("key_select")
-        .setPlaceholder("Select key")
-        .addOptions(
-          options.length
-            ? options
-            : [{ label: "No keys", value: "none" }]
-        )
+  const embed = new EmbedBuilder()
+    .setTitle("🔑 Key Manager")
+    .setColor(0x2b2d31)
+    .setDescription(
+      `Page ${page + 1} • Total ${keys.length}\n\n` +
+      pageKeys
+        .map((k) => {
+          const hw = k.hwids?.length ? k.hwids.join(", ") : "None";
+          return `**${k.key}**\nStatus: ${
+            k.revoked ? "REVOKED" : k.used ? "USED" : "FREE"
+          }\nHWID: \`${hw.slice(0, 80)}\`\n`;
+        })
+        .join("\n")
     );
 
-    const nav = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`page_prev_${page}`)
-        .setLabel("Prev")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page === 0),
+  const menu = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("key_select")
+      .setPlaceholder("Select key")
+      .addOptions(
+        pageKeys.map((k) => ({
+          label: k.key.slice(0, 25),
+          value: k.key,
+        }))
+      )
+  );
 
-      new ButtonBuilder()
-        .setCustomId(`page_next_${page}`)
-        .setLabel("Next")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(start + PAGE_SIZE >= keys.length)
-    );
+  const nav = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`page_prev_${page}`)
+      .setLabel("Prev")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === 0),
 
-    return safeReply(i, {
+    new ButtonBuilder()
+      .setCustomId(`page_next_${page}`)
+      .setLabel("Next")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(start + PAGE_SIZE >= keys.length)
+  );
+
+  // IMPORTANT FIX: ALWAYS UPDATE, NEVER REPLY AGAIN
+  if (i.update) {
+    return i.update({
       embeds: [embed],
       components: [menu, nav],
-      flags: 64,
     });
-  } catch (err) {
-    console.log("UI ERROR:", err?.message);
-    return safeReply(i, { content: "Failed to load keys", flags: 64 });
   }
+
+  return i.editReply({
+    embeds: [embed],
+    components: [menu, nav],
+  });
 }
 
 /* ---------------- BOT ---------------- */
