@@ -18,30 +18,30 @@ const PAGE_SIZE = 10;
 
 /* ---------------- API ---------------- */
 
-async function apiGet(url: string) {
+async function apiGet(url) {
   return axios.get(url, {
     headers: { "x-admin-secret": process.env.ADMIN_SECRET },
     timeout: 5000,
   });
 }
 
-async function apiPost(url: string, data?: any) {
+async function apiPost(url, data) {
   return axios.post(url, data, {
     headers: { "x-admin-secret": process.env.ADMIN_SECRET },
     timeout: 5000,
   });
 }
 
-async function apiDelete(url: string) {
+async function apiDelete(url) {
   return axios.delete(url, {
     headers: { "x-admin-secret": process.env.ADMIN_SECRET },
     timeout: 5000,
   });
 }
 
-/* ---------------- SAFE INTERACTION HANDLER ---------------- */
+/* ---------------- SAFE REPLY ---------------- */
 
-async function safeReply(i: any, payload: any) {
+async function safeReply(i, payload) {
   try {
     if (i.deferred || i.replied) return await i.editReply(payload);
     return await i.reply(payload);
@@ -54,27 +54,25 @@ async function safeReply(i: any, payload: any) {
   }
 }
 
-/* ---------------- KEY HIERARCHY SORT ---------------- */
+/* ---------------- SORTING ---------------- */
 
-function sortKeys(keys: any[]) {
+function sortKeys(keys) {
   return [...keys].sort((a, b) => {
-    const score = (k: any) => {
+    const score = (k) => {
       const hwidCount = k.hwidCount || 0;
       if (hwidCount >= 2) return 0; // multi HWID first
       if (k.used) return 1;        // used second
-      return 2;                    // free last
+      return 2;                   // free last
     };
     return score(a) - score(b);
   });
 }
 
-/* ---------------- KEY LIST UI ---------------- */
+/* ---------------- UI ---------------- */
 
-async function renderKeysUI(i: any, page = 0) {
+async function renderKeysUI(i, page = 0) {
   const res = await apiGet(`${API}/api/admin/keys`);
-  const rawKeys = Array.isArray(res.data) ? res.data : [];
-
-  const keys = sortKeys(rawKeys);
+  const keys = sortKeys(Array.isArray(res.data) ? res.data : []);
 
   const start = page * PAGE_SIZE;
   const pageKeys = keys.slice(start, start + PAGE_SIZE);
@@ -82,7 +80,7 @@ async function renderKeysUI(i: any, page = 0) {
   const options = pageKeys.slice(0, 25).map((k) => ({
     label: (k.key || "UNKNOWN").slice(0, 25),
     description:
-      (k.hwidCount || 0) >= 2
+      k.hwidCount >= 2
         ? `🔴 MULTI HWID (${k.hwidCount})`
         : k.used
         ? "🟠 USED"
@@ -94,21 +92,17 @@ async function renderKeysUI(i: any, page = 0) {
     .setTitle("🔑 Key Manager")
     .setColor(0x2b2d31)
     .setDescription(
-      `Page ${page + 1} • Total ${keys.length}\n\n🔴 Multi-HWID → 🟠 Used → 🟢 Free`
+      `Page ${page + 1} • Total ${keys.length}\nMulti-HWID → Used → Free`
     );
 
-  const menu = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+  const menu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("key_select")
       .setPlaceholder("Select key")
-      .addOptions(
-        options.length
-          ? options
-          : [{ label: "No keys", value: "none" }]
-      )
+      .addOptions(options.length ? options : [{ label: "No keys", value: "none" }])
   );
 
-  const nav = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const nav = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`keys_prev_${page}`)
       .setLabel("Prev")
@@ -131,11 +125,10 @@ async function renderKeysUI(i: any, page = 0) {
 
 /* ---------------- GET KEY ---------------- */
 
-async function getKey(user: any) {
+async function getKey(user) {
   try {
     const res = await axios.get(`${API}/api/keys/unused`, {
       headers: { Authorization: process.env.BOT_SECRET },
-      timeout: 5000,
     });
 
     const key = res.data?.key;
@@ -153,7 +146,7 @@ async function getKey(user: any) {
   }
 }
 
-/* ---------------- INTERACTIONS ---------------- */
+/* ---------------- BOT ---------------- */
 
 client.on("interactionCreate", async (i) => {
   try {
@@ -182,25 +175,27 @@ client.on("interactionCreate", async (i) => {
       const k = res.data;
 
       const hwids = k.hwids || [];
-      const hwidText =
-        hwids.length > 0
-          ? hwids.join("\n")
-          : k.hwid || "None";
 
       const embed = new EmbedBuilder()
         .setTitle("🔑 Key Details")
-        .setColor((k.hwidCount || 0) >= 2 ? 0xff0000 : 0x00aaff)
+        .setColor(k.hwidCount >= 2 ? 0xff0000 : 0x00aaff)
         .addFields(
           { name: "Key", value: `\`${k.key}\`` },
           {
             name: "Status",
             value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
           },
-          { name: "HWIDs", value: hwidText },
-          { name: "HWID Count", value: String(k.hwidCount || 0) }
+          {
+            name: "HWIDs",
+            value: hwids.length ? hwids.join("\n") : "None",
+          },
+          {
+            name: "HWID Count",
+            value: String(k.hwidCount || 0),
+          }
         );
 
-      const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`copy_${k.key}`)
           .setLabel("Copy")
@@ -222,7 +217,7 @@ client.on("interactionCreate", async (i) => {
           .setStyle(ButtonStyle.Secondary)
       );
 
-      const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`hwid_${k.key}`)
           .setLabel("HWID")
@@ -265,7 +260,7 @@ client.on("interactionCreate", async (i) => {
       if (action === "hwid") {
         const res = await apiGet(`${API}/api/admin/key/${key}`);
         return safeReply(i, {
-          content: `HWIDs:\n\`${(res.data.hwids || []).join("\n") || "None"}\``,
+          content: `HWIDs:\n${(res.data.hwids || []).join("\n") || "None"}`,
           flags: 64,
         });
       }
@@ -284,7 +279,7 @@ client.on("interactionCreate", async (i) => {
         if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
       }
     }
-  } catch (err: any) {
+  } catch (err) {
     console.log("ERROR:", err?.message || err);
 
     if (!i.replied) {
