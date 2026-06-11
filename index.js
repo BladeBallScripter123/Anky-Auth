@@ -14,63 +14,79 @@ const client = new Client({
 });
 
 const API = process.env.API_URL!;
-const ADMIN = process.env.ADMIN_SECRET!;
-
 const PAGE_SIZE = 10;
 
-/* ---------------- SAFE API ---------------- */
+/* ---------------- API ---------------- */
 
-const api = axios.create({
-  baseURL: API,
-  timeout: 8000,
-  headers: {
-    "x-admin-secret": ADMIN,
-  },
-});
-
-/* ---------------- SAFE SORT ---------------- */
-
-function sortKeys(keys: any[]) {
-  return keys.sort((a, b) => {
-    const aMulti = (a.hwidCount || 0) > 1 ? 0 : 1;
-    const bMulti = (b.hwidCount || 0) > 1 ? 0 : 1;
-
-    if (aMulti !== bMulti) return aMulti - bMulti;
-    if (a.used !== b.used) return b.used - a.used;
-    return (a.revoked ? 1 : 0) - (b.revoked ? 1 : 0);
+async function apiGet(url: string) {
+  return axios.get(url, {
+    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
+    timeout: 5000,
   });
 }
 
-/* ---------------- KEY UI (SAFE) ---------------- */
+async function apiPost(url: string, data?: any) {
+  return axios.post(url, data, {
+    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
+    timeout: 5000,
+  });
+}
+
+async function apiDelete(url: string) {
+  return axios.delete(url, {
+    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
+    timeout: 5000,
+  });
+}
+
+/* ---------------- SAFE INTERACTION HANDLER ---------------- */
+
+async function safeReply(i: any, payload: any) {
+  try {
+    if (i.deferred || i.replied) return await i.editReply(payload);
+    return await i.reply(payload);
+  } catch {
+    try {
+      return await i.followUp(payload);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/* ---------------- KEY HIERARCHY SORT ---------------- */
+
+function sortKeys(keys: any[]) {
+  return [...keys].sort((a, b) => {
+    const score = (k: any) => {
+      const hwidCount = k.hwidCount || 0;
+      if (hwidCount >= 2) return 0; // multi HWID first
+      if (k.used) return 1;        // used second
+      return 2;                    // free last
+    };
+    return score(a) - score(b);
+  });
+}
+
+/* ---------------- KEY LIST UI ---------------- */
 
 async function renderKeysUI(i: any, page = 0) {
-  const res = await api.get("/api/admin/keys").catch(() => null);
+  const res = await apiGet(`${API}/api/admin/keys`);
+  const rawKeys = Array.isArray(res.data) ? res.data : [];
 
-  let keys = Array.isArray(res?.data) ? res.data : [];
-
-  if (!keys.length) {
-    const embed = new EmbedBuilder()
-      .setTitle("🔑 Key Manager")
-      .setColor(0x2b2d31)
-      .setDescription("No keys returned from backend.");
-
-    return i.reply?.({ embeds: [embed], flags: 64 });
-  }
-
-  keys = sortKeys(keys);
+  const keys = sortKeys(rawKeys);
 
   const start = page * PAGE_SIZE;
   const pageKeys = keys.slice(start, start + PAGE_SIZE);
 
-  const options = pageKeys.map((k: any) => ({
+  const options = pageKeys.slice(0, 25).map((k) => ({
     label: (k.key || "UNKNOWN").slice(0, 25),
-    description: k.revoked
-      ? "REVOKED"
-      : (k.hwidCount || 0) > 1
-      ? `⚠ MULTI HWID (${k.hwidCount})`
-      : k.used
-      ? "USED"
-      : "FREE",
+    description:
+      (k.hwidCount || 0) >= 2
+        ? `🔴 MULTI HWID (${k.hwidCount})`
+        : k.used
+        ? "🟠 USED"
+        : "🟢 FREE",
     value: k.key,
   }));
 
@@ -78,12 +94,12 @@ async function renderKeysUI(i: any, page = 0) {
     .setTitle("🔑 Key Manager")
     .setColor(0x2b2d31)
     .setDescription(
-      `Page ${page + 1}\nTotal: ${keys.length}\n\nMulti-HWID → Used → Free`
+      `Page ${page + 1} • Total ${keys.length}\n\n🔴 Multi-HWID → 🟠 Used → 🟢 Free`
     );
 
   const menu = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`keys_select_${page}`)
+      .setCustomId("key_select")
       .setPlaceholder("Select key")
       .addOptions(
         options.length
@@ -106,25 +122,26 @@ async function renderKeysUI(i: any, page = 0) {
       .setDisabled(start + PAGE_SIZE >= keys.length)
   );
 
-  if (i.isChatInputCommand()) {
+  if (i.deferred || i.replied) {
     return i.editReply({ embeds: [embed], components: [menu, nav] });
   }
 
-  return i.update?.({ embeds: [embed], components: [menu, nav] });
+  return i.reply({ embeds: [embed], components: [menu, nav], flags: 64 });
 }
 
-/* ---------------- GET KEY (UNCHANGED SAFE) ---------------- */
+/* ---------------- GET KEY ---------------- */
 
 async function getKey(user: any) {
   try {
-    const res = await api.get("/api/keys/unused", {
+    const res = await axios.get(`${API}/api/keys/unused`, {
       headers: { Authorization: process.env.BOT_SECRET },
+      timeout: 5000,
     });
 
     const key = res.data?.key;
     if (!key) return null;
 
-    await api.post("/api/keys/assign", {
+    await axios.post(`${API}/api/keys/assign`, {
       key,
       userId: user.id,
       username: user.username,
@@ -136,69 +153,54 @@ async function getKey(user: any) {
   }
 }
 
-/* ---------------- BOT ---------------- */
+/* ---------------- INTERACTIONS ---------------- */
 
 client.on("interactionCreate", async (i) => {
   try {
     /* COMMANDS */
     if (i.isChatInputCommand()) {
-      await i.deferReply({ flags: 64 });
+      if (!i.deferred) await i.deferReply({ flags: 64 });
 
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
-        return i.editReply(key ? `\`${key}\`` : "No keys available.");
+        return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
       }
 
       if (i.commandName === "keys") {
         return renderKeysUI(i, 0);
       }
-
-      /* IMPORTANT: DO NOT BREAK OTHER COMMANDS */
-      if (i.commandName === "dashboard") {
-        return i.editReply("Dashboard endpoint not supported in this bot version.");
-      }
-
-      if (i.commandName === "activity") {
-        return i.editReply("Activity endpoint not supported in this bot version.");
-      }
     }
 
-    /* SELECT MENU */
-    if (i.isStringSelectMenu()) {
+    /* SELECT KEY */
+    if (i.isStringSelectMenu() && i.customId === "key_select") {
       if (i.values[0] === "none") {
-        return i.reply({ content: "No keys.", flags: 64 });
+        return safeReply(i, { content: "No keys.", flags: 64 });
       }
 
       const key = i.values[0];
+      const res = await apiGet(`${API}/api/admin/key/${key}`);
+      const k = res.data;
 
-      const res = await api
-        .get(`/api/admin/key/${key}`)
-        .catch(() => null);
-
-      const k = res?.data;
-
-      if (!k) {
-        return i.reply({ content: "Key not found", flags: 64 });
-      }
+      const hwids = k.hwids || [];
+      const hwidText =
+        hwids.length > 0
+          ? hwids.join("\n")
+          : k.hwid || "None";
 
       const embed = new EmbedBuilder()
         .setTitle("🔑 Key Details")
-        .setColor((k.hwidCount || 0) > 1 ? 0xff0000 : 0x00aaff)
+        .setColor((k.hwidCount || 0) >= 2 ? 0xff0000 : 0x00aaff)
         .addFields(
           { name: "Key", value: `\`${k.key}\`` },
           {
             name: "Status",
-            value: k.revoked
-              ? "REVOKED"
-              : k.used
-              ? "USED"
-              : "FREE",
+            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
           },
-          { name: "HWID", value: k.hwid || "None" },
-          { name: "HWID COUNT", value: String(k.hwidCount || 0) }
+          { name: "HWIDs", value: hwidText },
+          { name: "HWID Count", value: String(k.hwidCount || 0) }
         );
 
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`copy_${k.key}`)
           .setLabel("Copy")
@@ -220,36 +222,70 @@ client.on("interactionCreate", async (i) => {
           .setStyle(ButtonStyle.Secondary)
       );
 
-      return i.update({ embeds: [embed], components: [row] });
+      const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`hwid_${k.key}`)
+          .setLabel("HWID")
+          .setStyle(ButtonStyle.Secondary),
+
+        new ButtonBuilder()
+          .setCustomId(`banhwid_${k.key}`)
+          .setLabel("Ban HWID")
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      return i.update({ embeds: [embed], components: [row1, row2] });
     }
 
     /* BUTTONS */
     if (i.isButton()) {
-      const parts = i.customId.split("_");
+      const id = i.customId;
 
-      if (i.customId === "back_keys") {
+      if (id === "back_keys") {
         return renderKeysUI(i, 0);
       }
 
+      const parts = id.split("_");
       const action = parts[0];
       const key = parts.slice(1).join("_");
 
-      if (action === "copy") {
-        return i.reply({ content: `\`${key}\``, flags: 64 });
-      }
+      if (action === "copy")
+        return safeReply(i, { content: `\`${key}\``, flags: 64 });
 
       if (action === "revoke") {
-        await api.post("/api/admin/revoke", { key }).catch(() => {});
-        return i.reply({ content: "Revoked", flags: 64 });
+        await apiPost(`${API}/api/admin/revoke`, { key });
+        return safeReply(i, { content: "Updated", flags: 64 });
       }
 
       if (action === "delete") {
-        await api.delete(`/api/admin/key/${key}`).catch(() => {});
-        return i.reply({ content: "Deleted", flags: 64 });
+        await apiDelete(`${API}/api/admin/key/${key}`);
+        return safeReply(i, { content: "Deleted", flags: 64 });
+      }
+
+      if (action === "hwid") {
+        const res = await apiGet(`${API}/api/admin/key/${key}`);
+        return safeReply(i, {
+          content: `HWIDs:\n\`${(res.data.hwids || []).join("\n") || "None"}\``,
+          flags: 64,
+        });
+      }
+
+      if (action === "banhwid") {
+        await apiPost(`${API}/api/admin/ban-hwid`, { key });
+        return safeReply(i, { content: "Done", flags: 64 });
+      }
+
+      /* pagination */
+      if (action === "keys") {
+        const dir = parts[1];
+        const page = Number(parts[2]) || 0;
+
+        if (dir === "next") return renderKeysUI(i, page + 1);
+        if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
       }
     }
-  } catch (err) {
-    console.log("BOT ERROR:", err);
+  } catch (err: any) {
+    console.log("ERROR:", err?.message || err);
 
     if (!i.replied) {
       try {
