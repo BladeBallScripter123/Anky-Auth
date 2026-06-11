@@ -42,7 +42,7 @@ async function apiDelete(url) {
 
 const PAGE_SIZE = 10;
 
-/* ---------------- KEY UI ---------------- */
+/* ---------------- RENDER KEYS UI ---------------- */
 
 async function renderKeysUI(i, page = 0) {
   const res = await apiGet(`${API}/api/admin/keys`);
@@ -64,11 +64,9 @@ async function renderKeysUI(i, page = 0) {
   const embed = new EmbedBuilder()
     .setTitle("🔑 Key Manager")
     .setColor(0x2b2d31)
-    .setDescription(
-      `Page **${page + 1}**\nTotal: **${keys.length}**`
-    );
+    .setDescription(`Page ${page + 1} • Total ${keys.length}`);
 
-  const row = new ActionRowBuilder().addComponents(
+  const menuRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("key_select")
       .setPlaceholder("Select key")
@@ -77,7 +75,7 @@ async function renderKeysUI(i, page = 0) {
       ])
   );
 
-  const nav = new ActionRowBuilder().addComponents(
+  const navRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`keys_prev_${page}`)
       .setLabel("⬅ Prev")
@@ -91,7 +89,16 @@ async function renderKeysUI(i, page = 0) {
       .setDisabled(start + PAGE_SIZE >= keys.length)
   );
 
-  return i.update({ embeds: [embed], components: [row, nav] });
+  // FIX: interaction type safe handling
+  if (i.deferred || i.replied) {
+    return i.editReply({ embeds: [embed], components: [menuRow, navRow] });
+  }
+
+  return i.reply({
+    embeds: [embed],
+    components: [menuRow, navRow],
+    flags: 64,
+  });
 }
 
 /* ---------------- GET KEY ---------------- */
@@ -128,7 +135,9 @@ client.on("interactionCreate", async (i) => {
 
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
-        return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
+        return i.editReply(
+          key ? `Key: \`${key}\`` : "No keys available."
+        );
       }
 
       if (i.commandName === "keys") {
@@ -190,9 +199,9 @@ client.on("interactionCreate", async (i) => {
       return i.update({ embeds: [embed], components: [row] });
     }
 
-    /* ---------------- NAVIGATION ---------------- */
+    /* ---------------- BUTTONS ---------------- */
     if (i.isButton()) {
-      const [action, key, page] = i.customId.split("_");
+      const parts = i.customId.split("_");
 
       /* BACK */
       if (i.customId === "back_keys") {
@@ -200,19 +209,17 @@ client.on("interactionCreate", async (i) => {
       }
 
       /* PAGINATION */
-      if (action === "keys") {
-        const pageNum = parseInt(page);
+      if (parts[0] === "keys") {
+        const dir = parts[1];
+        const page = Number(parts[2]) || 0;
 
-        if (key === "next") {
-          return renderKeysUI(i, pageNum + 1);
-        }
-
-        if (key === "prev") {
-          return renderKeysUI(i, Math.max(pageNum - 1, 0));
-        }
+        if (dir === "next") return renderKeysUI(i, page + 1);
+        if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
       }
 
-      /* KEY ACTIONS */
+      const action = parts[0];
+      const key = parts.slice(1).join("_");
+
       if (action === "copy") {
         return i.reply({ content: `\`${key}\``, flags: 64 });
       }
