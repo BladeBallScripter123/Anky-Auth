@@ -40,21 +40,26 @@ async function apiDelete(url) {
   });
 }
 
-/* ---------------- SAFE KEY UI ---------------- */
+/* ---------------- KEY UI ---------------- */
 
 async function renderKeysUI(i, page = 0) {
   const res = await apiGet(`${API}/api/admin/keys`);
   const keys = Array.isArray(res.data) ? res.data : [];
 
+  /* 🔥 EXPECTED BACKEND FIELDS:
+     key, used, revoked, hwidCount, suspicious
+  */
+
   const start = page * PAGE_SIZE;
   const pageKeys = keys.slice(start, start + PAGE_SIZE);
 
-  /* 🔥 FIX: ensure at least 1 valid option */
   const options =
     pageKeys.length > 0
       ? pageKeys.slice(0, 25).map((k) => ({
           label: (k.key || "UNKNOWN").slice(0, 25),
-          description: k.revoked
+          description: k.suspicious
+            ? `⚠ MULTI-HWID (${k.hwidCount || 0})`
+            : k.revoked
             ? "REVOKED"
             : k.used
             ? "USED"
@@ -72,7 +77,9 @@ async function renderKeysUI(i, page = 0) {
   const embed = new EmbedBuilder()
     .setTitle("🔑 Key Manager")
     .setColor(0x2b2d31)
-    .setDescription(`Page ${page + 1} • Total ${keys.length}`);
+    .setDescription(
+      `Page ${page + 1} • Total ${keys.length}\n\n⚠ = Multi-HWID abuse detection`
+    );
 
   const menuRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -142,7 +149,7 @@ client.on("interactionCreate", async (i) => {
       }
     }
 
-    /* ---------------- SELECT ---------------- */
+    /* ---------------- SELECT KEY ---------------- */
 
     if (i.isStringSelectMenu() && i.customId === "key_select") {
       if (i.values[0] === "none") {
@@ -156,17 +163,21 @@ client.on("interactionCreate", async (i) => {
 
       const embed = new EmbedBuilder()
         .setTitle("🔑 Key Details")
-        .setColor(0x00aaff)
+        .setColor(k.suspicious ? 0xff0000 : 0x00aaff)
         .addFields(
           { name: "Key", value: `\`${k.key}\`` },
           {
             name: "Status",
-            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
+            value: k.revoked
+              ? "REVOKED"
+              : k.used
+              ? "USED"
+              : "FREE",
           },
-          { name: "HWID", value: k.hwid || "None" }
+          { name: "HWID", value: k.hwid || "None" },
+          { name: "HWID Count", value: String(k.hwidCount || 0) }
         );
 
-      /* 🔥 IMPORTANT: MAX 5 BUTTONS PER ROW */
       const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`copy_${k.key}`)
@@ -211,14 +222,6 @@ client.on("interactionCreate", async (i) => {
 
       if (i.customId === "back_keys") {
         return renderKeysUI(i, 0);
-      }
-
-      if (parts[0] === "keys") {
-        const dir = parts[1];
-        const page = Number(parts[2]) || 0;
-
-        if (dir === "next") return renderKeysUI(i, page + 1);
-        if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
       }
 
       const action = parts[0];
