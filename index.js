@@ -9,7 +9,7 @@ const API = process.env.API_URL;
 
 /* ---------------- KEY SYSTEM ---------------- */
 
-async function getKey(user: any) {
+async function getKey(user) {
   const res = await axios.get(`${API}/api/keys/unused`, {
     headers: {
       Authorization: process.env.BOT_SECRET,
@@ -39,7 +39,7 @@ client.on("interactionCreate", async (i) => {
       await i.deferReply({ flags: 64 }).catch(() => {});
     }
 
-    /* ---------------- GETKEY ---------------- */
+    /* GETKEY */
     if (i.commandName === "getkey") {
       const key = await getKey(i.user);
 
@@ -48,7 +48,7 @@ client.on("interactionCreate", async (i) => {
       return i.editReply(`Key: ${key}`);
     }
 
-    /* ---------------- KEYS (ADMIN) ---------------- */
+    /* KEYS */
     if (i.commandName === "keys") {
       const res = await axios.get(`${API}/api/admin/keys`, {
         headers: {
@@ -56,16 +56,16 @@ client.on("interactionCreate", async (i) => {
         },
       });
 
-      const keys = res.data?.slice(0, 10) || [];
+      const keys = (res.data || []).slice(0, 10);
 
       const text = keys
-        .map((k: any) => `${k.key} | ${k.used ? "USED" : "FREE"}`)
+        .map(k => `${k.key} | ${k.used ? "USED" : "FREE"}`)
         .join("\n");
 
       return i.editReply(text || "No keys.");
     }
 
-    /* ---------------- ACTIVITY (ADMIN) ---------------- */
+    /* ACTIVITY */
     if (i.commandName === "activity") {
       const res = await axios.get(`${API}/api/admin/activity`, {
         headers: {
@@ -73,16 +73,16 @@ client.on("interactionCreate", async (i) => {
         },
       });
 
-      const logs = res.data?.slice(0, 10) || [];
+      const logs = (res.data || []).slice(0, 10);
 
       const text = logs
-        .map((l: any) => `${l.event} | ${l.key ?? "no-key"} | ${l.createdAt}`)
+        .map(l => `${l.event} | ${l.key ?? "no-key"} | ${l.createdAt}`)
         .join("\n");
 
       return i.editReply(text || "No activity.");
     }
 
-    /* ---------------- DASHBOARD ---------------- */
+    /* DASHBOARD */
     if (i.commandName === "dashboard") {
       const res = await axios.get(`${API}/api/admin/stats`, {
         headers: {
@@ -113,6 +113,7 @@ client.on("interactionCreate", async (i) => {
 
       return i.editReply({ embeds: [embed] });
     }
+
   } catch (err) {
     console.error("INTERACTION ERROR:", err);
 
