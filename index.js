@@ -11,7 +11,7 @@ const router = Router();
 
 /* ---------------- LOG HWID (AUDIT ONLY) ---------------- */
 
-async function logHwid(key: string, hwid: string) {
+async function logHwid(key, hwid) {
   if (!hwid) return;
 
   await db.insert(hwidLogTable).values({
