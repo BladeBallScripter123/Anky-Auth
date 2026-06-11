@@ -1,182 +1,165 @@
-import { Router } from "express";
-import { db } from "@workspace/db";
 import {
-  availableKeysTable,
-  licenceKeysTable,
-  hwidLogTable,
-} from "@workspace/db";
-import { eq } from "drizzle-orm";
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} from "discord.js";
+import axios from "axios";
 
-const router = Router();
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
 
-/* ---------------- LOG HWID (AUDIT ONLY) ---------------- */
+const API = process.env.API_URL;
+const PAGE_SIZE = 10;
 
-async function logHwid(key, hwid) {
-  if (!hwid) return;
+/* ---------------- API ---------------- */
 
-  await db.insert(hwidLogTable).values({
-    key,
-    hwid,
-    firstSeenAt: new Date(),
-    lastSeenAt: new Date(),
-  });
+const api = axios.create({
+  baseURL: API,
+  timeout: 5000,
+});
+
+/* ---------------- SAFE REPLY ---------------- */
+
+async function safeReply(i, payload) {
+  try {
+    if (i.deferred || i.replied) return await i.editReply(payload);
+    return await i.reply(payload);
+  } catch {
+    try {
+      return await i.followUp(payload);
+    } catch {
+      return null;
+    }
+  }
 }
 
-/* ---------------- GET UNUSED KEY ---------------- */
+/* ---------------- UI ---------------- */
 
-router.get("/api/keys/unused", async (_req, res) => {
-  const [key] = await db
-    .select()
-    .from(availableKeysTable)
-    .where(eq(availableKeysTable.revoked, false))
-    .limit(1);
+async function renderKeysUI(i, page = 0) {
+  const res = await api.get("/api/admin/keys");
+  const keys = res.data || [];
 
-  if (!key) return res.status(404).json({ error: "no keys" });
+  const start = page * PAGE_SIZE;
+  const pageKeys = keys.slice(start, start + PAGE_SIZE);
 
-  return res.json({ key: key.key });
-});
+  const options = pageKeys.map((k) => ({
+    label: k.key.slice(0, 25),
+    description: k.revoked
+      ? "🔴 REVOKED"
+      : k.used
+      ? "🟠 USED"
+      : "🟢 FREE",
+    value: k.key,
+  }));
 
-/* ---------------- ACTIVATE (FIXED HWID LOCK) ---------------- */
+  const embed = new EmbedBuilder()
+    .setTitle("🔑 Key Manager")
+    .setDescription(`Page ${page + 1} • Total ${keys.length}`)
+    .setColor(0x2b2d31);
 
-router.post("/api/keys/activate", async (req, res) => {
-  const { key, hwid } = req.body;
-
-  if (!key || !hwid)
-    return res.json({ ok: false, reason: "missing data" });
-
-  const normal = key.trim().toUpperCase();
-  const device = hwid.trim();
-
-  const [exists] = await db
-    .select()
-    .from(availableKeysTable)
-    .where(eq(availableKeysTable.key, normal))
-    .limit(1);
-
-  if (!exists) return res.json({ ok: false, reason: "invalid" });
-  if (exists.revoked) return res.json({ ok: false, reason: "revoked" });
-
-  // 🔥 REAL BIND CHECK (source of truth)
-  const [binding] = await db
-    .select()
-    .from(licenceKeysTable)
-    .where(eq(licenceKeysTable.key, normal))
-    .limit(1);
-
-  // FIRST TIME → bind HWID permanently
-  if (!binding) {
-    await db.insert(licenceKeysTable).values({
-      key: normal,
-      hwid: device,
-    });
-
-    await logHwid(normal, device);
-
-    return res.json({ ok: true, status: "bound" });
-  }
-
-  // SAME DEVICE → allow
-  if (binding.hwid === device) {
-    await logHwid(normal, device);
-    return res.json({ ok: true, status: "ok" });
-  }
-
-  // DIFFERENT DEVICE → reject
-  await logHwid(normal, device);
-
-  return res.json({
-    ok: false,
-    reason: "hwid_locked",
-  });
-});
-
-/* ---------------- ADMIN KEYS ---------------- */
-
-router.get("/api/admin/keys", async (_req, res) => {
-  const keys = await db.select().from(availableKeysTable);
-
-  const enriched = await Promise.all(
-    keys.map(async (k) => {
-      const [binding] = await db
-        .select()
-        .from(licenceKeysTable)
-        .where(eq(licenceKeysTable.key, k.key))
-        .limit(1);
-
-      const logs = await db
-        .select()
-        .from(hwidLogTable)
-        .where(eq(hwidLogTable.key, k.key));
-
-      return {
-        key: k.key,
-        revoked: k.revoked,
-        used: !!binding,
-        hwid: binding?.hwid || null,
-        attempts: logs.length,
-      };
-    })
+  const menu = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("key_select")
+      .setPlaceholder("Select key")
+      .addOptions(options.length ? options : [{ label: "No keys", value: "none" }])
   );
 
-  return res.json(enriched);
+  const nav = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`keys_prev_${page}`)
+      .setLabel("Prev")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === 0),
+
+    new ButtonBuilder()
+      .setCustomId(`keys_next_${page}`)
+      .setLabel("Next")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(start + PAGE_SIZE >= keys.length)
+  );
+
+  return safeReply(i, { embeds: [embed], components: [menu, nav], flags: 64 });
+}
+
+/* ---------------- GET KEY ---------------- */
+
+async function getKey(user) {
+  try {
+    const res = await api.get("/api/keys/unused");
+    return res.data?.key || null;
+  } catch {
+    return null;
+  }
+}
+
+/* ---------------- BOT ---------------- */
+
+client.on("interactionCreate", async (i) => {
+  try {
+    if (i.isChatInputCommand()) {
+      await i.deferReply({ flags: 64 });
+
+      if (i.commandName === "getkey") {
+        const key = await getKey(i.user);
+        return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
+      }
+
+      if (i.commandName === "keys") {
+        return renderKeysUI(i, 0);
+      }
+    }
+
+    if (i.isStringSelectMenu() && i.customId === "key_select") {
+      if (i.values[0] === "none") {
+        return safeReply(i, { content: "No keys.", flags: 64 });
+      }
+
+      const key = i.values[0];
+      const res = await api.get(`/api/admin/key/${key}`);
+      const k = res.data;
+
+      const embed = new EmbedBuilder()
+        .setTitle("🔑 Key Details")
+        .setColor(0x00aaff)
+        .addFields(
+          { name: "Key", value: `\`${k.key}\`` },
+          {
+            name: "Status",
+            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
+          },
+          {
+            name: "HWIDs",
+            value: k.hwids?.length ? k.hwids.join("\n") : "None",
+          }
+        );
+
+      return i.update({ embeds: [embed], components: [] });
+    }
+
+    if (i.isButton()) {
+      const [action, dir, pageStr] = i.customId.split("_");
+
+      if (action === "keys") {
+        const page = Number(pageStr) || 0;
+        if (dir === "next") return renderKeysUI(i, page + 1);
+        if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
+      }
+    }
+  } catch (err) {
+    console.log("ERROR:", err?.message || err);
+    safeReply(i, { content: "Error", flags: 64 });
+  }
 });
 
-/* ---------------- SINGLE KEY ---------------- */
+/* ---------------- READY ---------------- */
 
-router.get("/api/admin/key/:key", async (req, res) => {
-  const key = req.params.key.toUpperCase();
-
-  const [base] = await db
-    .select()
-    .from(availableKeysTable)
-    .where(eq(availableKeysTable.key, key))
-    .limit(1);
-
-  if (!base) return res.status(404).json({ error: "not found" });
-
-  const [binding] = await db
-    .select()
-    .from(licenceKeysTable)
-    .where(eq(licenceKeysTable.key, key))
-    .limit(1);
-
-  const logs = await db
-    .select()
-    .from(hwidLogTable)
-    .where(eq(hwidLogTable.key, key));
-
-  return res.json({
-    key: base.key,
-    revoked: base.revoked,
-    used: !!binding,
-    hwid: binding?.hwid || null,
-    attempts: logs.map((h) => h.hwid),
-  });
+client.once("clientReady", () => {
+  console.log("Bot online");
 });
 
-/* ---------------- REVOKE ---------------- */
-
-router.post("/api/admin/revoke", async (req, res) => {
-  const { key } = req.body;
-
-  await db
-    .update(availableKeysTable)
-    .set({ revoked: true })
-    .where(eq(availableKeysTable.key, key.toUpperCase()));
-
-  return res.json({ ok: true });
-});
-
-/* ---------------- DELETE ---------------- */
-
-router.delete("/api/admin/key/:key", async (req, res) => {
-  const key = req.params.key.toUpperCase();
-
-  await db.delete(availableKeysTable).where(eq(availableKeysTable.key, key));
-  await db.delete(licenceKeysTable).where(eq(licenceKeysTable.key, key));
-  await db.delete(hwidLogTable).where(eq(hwidLogTable.key, key));
-
-  return res.json({ ok: true });
-});
-
-export default router;
+client.login(process.env.TOKEN);
