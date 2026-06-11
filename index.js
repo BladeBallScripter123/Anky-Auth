@@ -108,12 +108,17 @@ client.on("interactionCreate", async (i) => {
       }
     }
 
-    /* ---------------- DEFER ---------------- */
-    if (!i.deferred && !i.replied) {
-      await i.deferReply({ flags: 64 }).catch(() => {});
+    if (i.isChatInputCommand()) {
+  try {
+    if (!i.replied && !i.deferred) {
+      await i.deferReply({ flags: 64 });
     }
+  } catch (e) {
+    console.log("DEFER FAILED", e);
+    return;
+  }
+}
 
-    /* ---------------- GETKEY ---------------- */
     if (i.commandName === "getkey") {
       const key = await getKey(i.user);
       return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
