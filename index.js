@@ -9,7 +9,7 @@ const API = process.env.API_URL;
 
 /* ---------------- KEY SYSTEM ---------------- */
 
-async function getKey(user) {
+async function getKey(user: any) {
   const res = await axios.get(`${API}/api/keys/unused`, {
     headers: {
       Authorization: process.env.BOT_SECRET,
@@ -29,37 +29,7 @@ async function getKey(user) {
   return key;
 }
 
-if (i.commandName === "keys") {
-  const res = await axios.get(`${API}/api/admin/keys`, {
-    headers: {
-      "x-admin-secret": process.env.ADMIN_SECRET,
-    },
-  });
-
-  const keys = res.data.slice(0, 10);
-
-  const text = keys
-    .map(k => `${k.key} | ${k.used ? "USED" : "FREE"}`)
-    .join("\n");
-
-  return i.editReply(text || "No keys.");
-}
-
-if (i.commandName === "activity") {
-  const res = await axios.get(`${API}/api/admin/activity`, {
-    headers: {
-      "x-admin-secret": process.env.ADMIN_SECRET,
-    },
-  });
-
-  const logs = res.data.slice(0, 10);
-
-  const text = logs
-    .map(l => `${l.event} | ${l.key ?? "no-key"} | ${l.createdAt}`)
-    .join("\n");
-
-  return i.editReply(text || "No activity.");
-}
+/* ---------------- INTERACTIONS ---------------- */
 
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
@@ -69,7 +39,7 @@ client.on("interactionCreate", async (i) => {
       await i.deferReply({ flags: 64 }).catch(() => {});
     }
 
-    // GETKEY
+    /* ---------------- GETKEY ---------------- */
     if (i.commandName === "getkey") {
       const key = await getKey(i.user);
 
@@ -78,7 +48,41 @@ client.on("interactionCreate", async (i) => {
       return i.editReply(`Key: ${key}`);
     }
 
-    // DASHBOARD
+    /* ---------------- KEYS (ADMIN) ---------------- */
+    if (i.commandName === "keys") {
+      const res = await axios.get(`${API}/api/admin/keys`, {
+        headers: {
+          "x-admin-secret": process.env.ADMIN_SECRET,
+        },
+      });
+
+      const keys = res.data?.slice(0, 10) || [];
+
+      const text = keys
+        .map((k: any) => `${k.key} | ${k.used ? "USED" : "FREE"}`)
+        .join("\n");
+
+      return i.editReply(text || "No keys.");
+    }
+
+    /* ---------------- ACTIVITY (ADMIN) ---------------- */
+    if (i.commandName === "activity") {
+      const res = await axios.get(`${API}/api/admin/activity`, {
+        headers: {
+          "x-admin-secret": process.env.ADMIN_SECRET,
+        },
+      });
+
+      const logs = res.data?.slice(0, 10) || [];
+
+      const text = logs
+        .map((l: any) => `${l.event} | ${l.key ?? "no-key"} | ${l.createdAt}`)
+        .join("\n");
+
+      return i.editReply(text || "No activity.");
+    }
+
+    /* ---------------- DASHBOARD ---------------- */
     if (i.commandName === "dashboard") {
       const res = await axios.get(`${API}/api/admin/stats`, {
         headers: {
@@ -109,7 +113,6 @@ client.on("interactionCreate", async (i) => {
 
       return i.editReply({ embeds: [embed] });
     }
-
   } catch (err) {
     console.error("INTERACTION ERROR:", err);
 
