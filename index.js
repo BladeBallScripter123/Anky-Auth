@@ -29,7 +29,37 @@ async function getKey(user) {
   return key;
 }
 
-/* ---------------- COMMAND HANDLER ---------------- */
+if (i.commandName === "keys") {
+  const res = await axios.get(`${API}/api/admin/keys`, {
+    headers: {
+      "x-admin-secret": process.env.ADMIN_SECRET,
+    },
+  });
+
+  const keys = res.data.slice(0, 10);
+
+  const text = keys
+    .map(k => `${k.key} | ${k.used ? "USED" : "FREE"}`)
+    .join("\n");
+
+  return i.editReply(text || "No keys.");
+}
+
+if (i.commandName === "activity") {
+  const res = await axios.get(`${API}/api/admin/activity`, {
+    headers: {
+      "x-admin-secret": process.env.ADMIN_SECRET,
+    },
+  });
+
+  const logs = res.data.slice(0, 10);
+
+  const text = logs
+    .map(l => `${l.event} | ${l.key ?? "no-key"} | ${l.createdAt}`)
+    .join("\n");
+
+  return i.editReply(text || "No activity.");
+}
 
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
