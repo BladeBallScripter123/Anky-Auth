@@ -51,39 +51,29 @@ client.on("interactionCreate", async (i) => {
       return i.editReply(`Key: ${key}`);
     }
 
-    /* ---------------- DASHBOARD ---------------- */
-    if (i.commandName === "dashboard") {
-      const res = await axios.get(`${API}/api/admin/stats`, {
-        headers: {
-          "x-admin-secret": process.env.ADMIN_SECRET,
-        },
-      });
+  if (i.commandName === "dashboard") {
+  const res = await axios.get(`${API}/api/admin/stats`, {
+    headers: {
+      "x-admin-secret": process.env.ADMIN_SECRET,
+    },
+  });
 
-      // detect wrong routing (HTML instead of JSON)
-      if (typeof res.data === "string" && res.data.includes("<!DOCTYPE html>")) {
-        console.log("HIT FRONTEND INSTEAD OF API");
-        return i.editReply("API routing is wrong (returning HTML).");
-      }
+  const data = res.data || {};
 
-      console.log("STATS RESPONSE:", res.data);
+  const embed = new EmbedBuilder()
+    .setTitle("📊 AnkyAuth Dashboard")
+    .setColor(0x5865f2)
+    .addFields(
+      { name: "Total Keys", value: String(data.total ?? 0), inline: true },
+      { name: "Used", value: String(data.used ?? 0), inline: true },
+      { name: "Unused", value: String(data.unused ?? 0), inline: true },
+      { name: "Revoked", value: String(data.revoked ?? 0), inline: true }
+    )
+    .setFooter({ text: "AnkyAuth System" })
+    .setTimestamp();
 
-      const data = res.data || {};
-
-      return i.editReply(
-        `Total: ${data.total ?? "?"}\nUsed: ${data.used ?? "?"}\nUnused: ${data.unused ?? "?"}\nRevoked: ${data.revoked ?? "?"}`
-      );
-    }
-
-  } catch (err) {
-    console.error("INTERACTION ERROR:", err);
-
-    if (!i.replied) {
-      await i.reply({ content: "Error.", flags: 64 }).catch(() => {});
-    }
-  }
-});
-
-/* ---------------- READY ---------------- */
+  return i.editReply({ embeds: [embed] });
+}
 
 client.once("ready", () => {
   console.log("Bot online");
