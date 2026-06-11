@@ -16,32 +16,23 @@ const API = process.env.API_URL;
 
 async function getKey(user) {
   try {
-    if (!process.env.API_URL) return null;
+    const url = `${process.env.API_URL}/api/keys/unused`;
 
-    const res = await axios.get(`${process.env.API_URL}/api/keys/unused`, {
-      headers: {
-        Authorization: process.env.BOT_SECRET,
-      },
+    console.log("Hitting:", url);
+
+    const res = await axios.get(url, {
+      headers: { Authorization: process.env.BOT_SECRET },
       timeout: 5000,
     });
 
+    console.log("Response:", res.data);
+
     const key = res.data?.key;
-
     if (!key) return null;
-
-    await axios.post(
-      `${process.env.API_URL}/api/keys/assign`,
-      {
-        key,
-        userId: user.id,
-        username: user.username,
-      },
-      { timeout: 5000 }
-    );
 
     return key;
   } catch (err) {
-    console.log("GETKEY ERROR:", err?.message || err);
+    console.log("GETKEY ERROR:", err.response?.status, err.response?.data || err.message);
     return null;
   }
 }
