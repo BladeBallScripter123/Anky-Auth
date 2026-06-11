@@ -1,228 +1,238 @@
-import {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  ActionRowBuilder,
-  StringSelectMenuBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-} from "discord.js";
-import axios from "axios";
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
+const crypto = require("crypto");
+const axios = require("axios");
+
+/* ---------------- CONFIG ---------------- */
+
+const OWNER_ID = "YOUR_DISCORD_ID_HERE";
+const COOLDOWN = 7 * 24 * 60 * 60 * 1000;
+
+/* ---------------- CLIENT ---------------- */
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-const API = process.env.API_URL;
-const ADMIN = process.env.ADMIN_SECRET;
+/* ---------------- STATE ---------------- */
 
-const PAGE_SIZE = 10;
+const lastClaim = new Map();
+const invitesCache = new Map();
+const userInviteCount = new Map();
+const eligibleUsers = new Set();
+const activeKeys = new Set();
 
-/* ---------------- API CLIENT ---------------- */
+/* ---------------- API SIGN ---------------- */
 
-const api = axios.create({
-  baseURL: API,
-  timeout: 5000,
-  headers: { "x-admin-secret": ADMIN },
-});
+function sign(secret) {
+  const timestamp = Date.now().toString();
+  const payload = `${timestamp}.`;
 
-/* ---------------- SAFE REPLY ---------------- */
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
 
-async function safeReply(i, payload) {
-  try {
-    if (i.deferred || i.replied) return await i.followUp(payload);
-    return await i.reply(payload);
-  } catch {
-    try {
-      return await i.followUp(payload);
-    } catch {
-      return null;
-    }
-  }
+  return { signature, timestamp };
 }
-
-/* ---------------- GET KEY ---------------- */
 
 async function getKey() {
-  try {
-    const res = await axios.get(`${API}/api/keys/unused`);
-    return res.data?.key || null;
-  } catch {
-    return null;
-  }
+  const { signature, timestamp } = sign(process.env.BOT_SECRET);
+
+  const res = await axios.get(
+    "https://yo-bot--ankymacro1.replit.app/api/keys/unused",
+    {
+      headers: {
+        "x-signature": signature,
+        "x-timestamp": timestamp,
+      },
+    }
+  );
+
+  return res.data?.key;
 }
 
-/* ---------------- RENDER UI ---------------- */
+/* ---------------- COMMAND REGISTER ---------------- */
 
-async function renderKeysUI(i, page = 0) {
-  const res = await api.get("/api/admin/keys");
-  const keys = Array.isArray(res.data) ? res.data : [];
+async function registerCommands() {
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  const start = page * PAGE_SIZE;
-  const pageKeys = keys.slice(start, start + PAGE_SIZE);
+  const commands = [
+    new SlashCommandBuilder().setName("getkey").setDescription("Get a license key"),
 
-  const embed = new EmbedBuilder()
-    .setTitle("🔑 Key Manager")
-    .setColor(0x2b2d31)
-    .setDescription(
-      `Page ${page + 1} • Total ${keys.length}\n\n` +
-        pageKeys
-          .map((k) => {
-            const hw = k.hwid || "None";
-            return `**${k.key}**\nStatus: ${
-              k.revoked ? "REVOKED" : k.used ? "USED" : "FREE"
-            }\nHWID: \`${hw}\`\n`;
-          })
-          .join("\n")
+    new SlashCommandBuilder().setName("key_time").setDescription("Check cooldown"),
+
+    new SlashCommandBuilder().setName("admin_invites").setDescription("Owner: invite stats"),
+
+    new SlashCommandBuilder().setName("admin_keys").setDescription("Owner: active keys"),
+
+    new SlashCommandBuilder()
+      .setName("deactivate_key")
+      .setDescription("Owner: revoke key")
+      .addStringOption(o =>
+        o.setName("key").setDescription("Key").setRequired(true)
+      ),
+  ].map(c => c.toJSON());
+
+  console.log("Registering commands...");
+
+  await rest.put(
+    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+    { body: commands }
+  );
+
+  console.log("Commands registered.");
+}
+
+/* ---------------- INVITES ---------------- */
+
+client.once("ready", async () => {
+  console.log(`Bot online as ${client.user.tag}`);
+
+  await registerCommands();
+
+  for (const [guildId, guild] of client.guilds.cache) {
+    const invites = await guild.invites.fetch();
+
+    invitesCache.set(
+      guildId,
+      new Map(invites.map(i => [i.code, i.uses]))
     );
+  }
+});
 
-  const menu = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId("key_select")
-      .setPlaceholder("Select key")
-      .addOptions(
-        pageKeys.map((k) => ({
-          label: k.key.slice(0, 25),
-          value: k.key,
-        }))
-      )
+client.on("guildMemberAdd", async (member) => {
+  const cached = invitesCache.get(member.guild.id) || new Map();
+  const newInvites = await member.guild.invites.fetch();
+
+  const used = newInvites.find(i =>
+    (cached.get(i.code) || 0) < i.uses
   );
 
-  const nav = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`page_prev_${page}`)
-      .setLabel("Prev")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(page === 0),
+  if (used?.inviter) {
+    const id = used.inviter.id;
 
-    new ButtonBuilder()
-      .setCustomId(`page_next_${page}`)
-      .setLabel("Next")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(start + PAGE_SIZE >= keys.length)
-  );
+    const count = userInviteCount.get(id) || 0;
+    userInviteCount.set(id, count + 1);
 
-  if (i.update) {
-    return i.update({ embeds: [embed], components: [menu, nav] });
+    eligibleUsers.add(id);
   }
 
-  return i.editReply({ embeds: [embed], components: [menu, nav] });
-}
+  invitesCache.set(
+    member.guild.id,
+    new Map(newInvites.map(i => [i.code, i.uses]))
+  );
+});
 
-/* ---------------- BOT ---------------- */
+/* ---------------- COMMANDS ---------------- */
 
-client.on("interactionCreate", async (i) => {
-  try {
-    /* ---------------- COMMANDS ---------------- */
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
 
-    if (i.isChatInputCommand()) {
-      if (!i.deferred && !i.replied) {
-        await i.deferReply({ flags: 64 });
-      }
+  const userId = interaction.user.id;
 
-      if (i.commandName === "getkey") {
-        const key = await getKey();
-        return safeReply(i, {
-          content: key ? `Key: \`${key}\`` : "No keys available",
-        });
-      }
+  /* ---------------- GET KEY ---------------- */
 
-      if (i.commandName === "keys") {
-        return renderKeysUI(i, 0);
-      }
+  if (interaction.commandName === "getkey") {
+    await interaction.deferReply({ ephemeral: true });
+
+    if (!eligibleUsers.has(userId)) {
+      return interaction.editReply("Invite 1 person first.");
     }
 
-    /* ---------------- SELECT MENU ---------------- */
+    const now = Date.now();
+    const last = lastClaim.get(userId) || 0;
 
-    if (i.isStringSelectMenu() && i.customId === "key_select") {
-      const key = i.values?.[0];
-      if (!key) return;
+    if (now - last < COOLDOWN) {
+      const remaining = Math.ceil((COOLDOWN - (now - last)) / 86400000);
+      return interaction.editReply(`Cooldown active: ${remaining} day(s).`);
+    }
 
-      const res = await api.get(`/api/admin/key/${key}`);
-      const k = res.data;
+    try {
+      const key = await getKey();
 
-      const embed = new EmbedBuilder()
-        .setTitle("Key Info")
-        .setColor(0x00aaff)
-        .addFields(
-          { name: "Key", value: `\`${k.key}\`` },
-          {
-            name: "Status",
-            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
-          },
-          {
-            name: "HWID",
-            value: k.hwid || "None",
-          }
-        );
+      if (!key) return interaction.editReply("No keys available.");
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`copy:${k.key}`)
-          .setLabel("Copy")
-          .setStyle(ButtonStyle.Primary),
+      activeKeys.add(key);
+      lastClaim.set(userId, now);
 
-        new ButtonBuilder()
-          .setCustomId(`revoke:${k.key}`)
-          .setLabel("Revoke")
-          .setStyle(ButtonStyle.Danger),
+      // consume invite requirement
+      eligibleUsers.delete(userId);
 
-        new ButtonBuilder()
-          .setCustomId(`delete:${k.key}`)
-          .setLabel("Delete")
-          .setStyle(ButtonStyle.Danger),
+      return interaction.editReply(`Your key: ${key}`);
+    } catch (err) {
+      console.error(err.message);
+      return interaction.editReply("API error (owner request failed).");
+    }
+  }
 
-        new ButtonBuilder()
-          .setCustomId("back")
-          .setLabel("Back")
-          .setStyle(ButtonStyle.Secondary)
+  /* ---------------- COOLDOWN CHECK ---------------- */
+
+  if (interaction.commandName === "key_time") {
+    const now = Date.now();
+    const last = lastClaim.get(userId) || 0;
+
+    const remaining = COOLDOWN - (now - last);
+
+    if (remaining <= 0) {
+      return interaction.reply({ content: "No cooldown active.", ephemeral: true });
+    }
+
+    const hours = Math.ceil(remaining / 3600000);
+
+    return interaction.reply({
+      content: `Cooldown remaining: ${hours} hour(s)`,
+      ephemeral: true,
+    });
+  }
+
+  /* ---------------- ADMIN: INVITES ---------------- */
+
+  if (interaction.commandName === "admin_invites") {
+    if (userId !== OWNER_ID)
+      return interaction.reply({ content: "No access", ephemeral: true });
+
+    const data =
+      [...userInviteCount.entries()]
+        .map(([id, c]) => `${id} → ${c}`)
+        .join("\n") || "No data";
+
+    return interaction.reply({ content: data, ephemeral: true });
+  }
+
+  /* ---------------- ADMIN: KEYS ---------------- */
+
+  if (interaction.commandName === "admin_keys") {
+    if (userId !== OWNER_ID)
+      return interaction.reply({ content: "No access", ephemeral: true });
+
+    const data = [...activeKeys].join("\n") || "No active keys";
+
+    return interaction.reply({ content: data, ephemeral: true });
+  }
+
+  /* ---------------- ADMIN: REVOKE ---------------- */
+
+  if (interaction.commandName === "deactivate_key") {
+    if (userId !== OWNER_ID)
+      return interaction.reply({ content: "No access", ephemeral: true });
+
+    const key = interaction.options.getString("key");
+
+    activeKeys.delete(key);
+
+    try {
+      await axios.post(
+        "https://yo-bot--ankymacro1.replit.app/api/keys/logout",
+        { key }
       );
-
-      return i.update({ embeds: [embed], components: [row] });
+    } catch (err) {
+      console.error(err.message);
     }
 
-    /* ---------------- BUTTONS ---------------- */
-
-    if (i.isButton()) {
-      const [action, keyRaw] = i.customId.split(":");
-      const key = keyRaw || "";
-
-      if (action === "back") {
-        if (!i.deferred && !i.replied) await i.deferUpdate();
-        return renderKeysUI(i, 0);
-      }
-
-      if (action === "copy") {
-        return safeReply(i, { content: `\`${key}\``, flags: 64 });
-      }
-
-      if (action === "revoke") {
-        await api.post("/api/admin/revoke", { key });
-        return safeReply(i, { content: "Revoked", flags: 64 });
-      }
-
-      if (action === "delete") {
-        await api.delete(`/api/admin/key/${key}`);
-        return safeReply(i, { content: "Deleted", flags: 64 });
-      }
-
-      if (action === "page") {
-        const dir = keyRaw;
-        const currentPage = Number(dir) || 0;
-
-        return renderKeysUI(i, currentPage);
-      }
-    }
-  } catch (err) {
-    console.log("BOT ERROR:", err?.response?.data || err.message);
-    return safeReply(i, { content: "Error occurred", flags: 64 });
+    return interaction.reply({ content: `Revoked: ${key}`, ephemeral: true });
   }
 });
 
-/* ---------------- READY ---------------- */
-
-client.once("clientReady", () => {
-  console.log("Bot online");
-});
+/* ---------------- START ---------------- */
 
 client.login(process.env.TOKEN);
