@@ -44,10 +44,13 @@ async function apiDelete(url) {
 
 async function renderKeysUI(i, page = 0) {
   const res = await apiGet(`${API}/api/admin/keys`);
-  const keys = Array.isArray(res.data) ? res.data : [];
+  let keys = Array.isArray(res.data) ? res.data : [];
 
-  /* 🔥 EXPECTED BACKEND FIELDS:
-     key, used, revoked, hwidCount, suspicious
+  /*
+    EXPECTED BACKEND ORDER (IMPORTANT):
+    1. suspicious (hwidCount >= 2)
+    2. used
+    3. free
   */
 
   const start = page * PAGE_SIZE;
@@ -59,10 +62,10 @@ async function renderKeysUI(i, page = 0) {
           label: (k.key || "UNKNOWN").slice(0, 25),
           description: k.suspicious
             ? `⚠ MULTI-HWID (${k.hwidCount || 0})`
-            : k.revoked
-            ? "REVOKED"
             : k.used
             ? "USED"
+            : k.revoked
+            ? "REVOKED"
             : "FREE",
           value: k.key,
         }))
@@ -78,7 +81,13 @@ async function renderKeysUI(i, page = 0) {
     .setTitle("🔑 Key Manager")
     .setColor(0x2b2d31)
     .setDescription(
-      `Page ${page + 1} • Total ${keys.length}\n\n⚠ = Multi-HWID abuse detection`
+      [
+        `Page ${page + 1} • Total ${keys.length}`,
+        ``,
+        `🔴 Multi-HWID keys appear first`,
+        `🟠 Used keys second`,
+        `🟢 Free keys last`,
+      ].join("\n")
     );
 
   const menuRow = new ActionRowBuilder().addComponents(
@@ -141,7 +150,9 @@ client.on("interactionCreate", async (i) => {
 
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
-        return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
+        return i.editReply(
+          key ? `Key: \`${key}\`` : "No keys available."
+        );
       }
 
       if (i.commandName === "keys") {
@@ -157,7 +168,6 @@ client.on("interactionCreate", async (i) => {
       }
 
       const key = i.values[0];
-
       const res = await apiGet(`${API}/api/admin/key/${key}`);
       const k = res.data;
 
