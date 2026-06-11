@@ -34,34 +34,32 @@ async function getKey(user) {
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
 
-  // GETKEY
-  if (i.commandName === "getkey") {
-    await i.deferReply({ flags: 64 });
+  try {
+    // ALWAYS defer safely (prevents 10062 crash)
+    if (!i.deferred && !i.replied) {
+      await i.deferReply({ flags: 64 }).catch(() => {});
+    }
 
-    try {
+    /* ---------------- GETKEY ---------------- */
+    if (i.commandName === "getkey") {
       const key = await getKey(i.user);
 
-      if (!key) return i.editReply("No keys available.");
+      if (!key) {
+        return i.editReply("No keys available.");
+      }
 
       return i.editReply(`Key: ${key}`);
-    } catch (err) {
-      console.error("GETKEY ERROR:", err.response?.data || err);
-      return i.editReply("Error getting key.");
     }
-  }
 
-  // DASHBOARD
-  if (i.commandName === "dashboard") {
-    await i.deferReply({ flags: 64 });
-
-    try {
-      const res = await axios.get(`${API}/admin/stats`, {
+    /* ---------------- DASHBOARD ---------------- */
+    if (i.commandName === "dashboard") {
+      const res = await axios.get(`${API}/api/admin/stats`, {
         headers: {
           "x-admin-secret": process.env.ADMIN_SECRET,
         },
       });
 
-      // 🚨 detect if you hit frontend instead of API
+      // detect wrong routing (HTML instead of JSON)
       if (typeof res.data === "string" && res.data.includes("<!DOCTYPE html>")) {
         console.log("HIT FRONTEND INSTEAD OF API");
         return i.editReply("API routing is wrong (returning HTML).");
@@ -74,9 +72,13 @@ client.on("interactionCreate", async (i) => {
       return i.editReply(
         `Total: ${data.total ?? "?"}\nUsed: ${data.used ?? "?"}\nUnused: ${data.unused ?? "?"}\nRevoked: ${data.revoked ?? "?"}`
       );
-    } catch (err) {
-      console.error("DASHBOARD ERROR:", err.response?.data || err);
-      return i.editReply("Dashboard error.");
+    }
+
+  } catch (err) {
+    console.error("INTERACTION ERROR:", err);
+
+    if (!i.replied) {
+      await i.reply({ content: "Error.", flags: 64 }).catch(() => {});
     }
   }
 });
