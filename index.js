@@ -15,6 +15,8 @@ const client = new Client({
 
 const API = process.env.API_URL;
 
+const PAGE_SIZE = 10;
+
 /* ---------------- API ---------------- */
 
 async function apiGet(url) {
@@ -38,28 +40,34 @@ async function apiDelete(url) {
   });
 }
 
-/* ---------------- STATE ---------------- */
-
-const PAGE_SIZE = 10;
-
-/* ---------------- RENDER KEYS UI ---------------- */
+/* ---------------- SAFE KEY UI ---------------- */
 
 async function renderKeysUI(i, page = 0) {
   const res = await apiGet(`${API}/api/admin/keys`);
-  const keys = res.data || [];
+  const keys = Array.isArray(res.data) ? res.data : [];
 
   const start = page * PAGE_SIZE;
   const pageKeys = keys.slice(start, start + PAGE_SIZE);
 
-  const options = pageKeys.map((k) => ({
-    label: k.key.slice(0, 25),
-    description: k.revoked
-      ? "REVOKED"
-      : k.used
-      ? "USED"
-      : "FREE",
-    value: k.key,
-  }));
+  /* 🔥 FIX: ensure at least 1 valid option */
+  const options =
+    pageKeys.length > 0
+      ? pageKeys.slice(0, 25).map((k) => ({
+          label: (k.key || "UNKNOWN").slice(0, 25),
+          description: k.revoked
+            ? "REVOKED"
+            : k.used
+            ? "USED"
+            : "FREE",
+          value: k.key,
+        }))
+      : [
+          {
+            label: "No keys available",
+            value: "none",
+            description: "empty",
+          },
+        ];
 
   const embed = new EmbedBuilder()
     .setTitle("🔑 Key Manager")
@@ -70,35 +78,26 @@ async function renderKeysUI(i, page = 0) {
     new StringSelectMenuBuilder()
       .setCustomId("key_select")
       .setPlaceholder("Select key")
-      .addOptions(options.length ? options : [
-        { label: "No keys", value: "none" }
-      ])
+      .addOptions(options)
   );
 
   const navRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`keys_prev_${page}`)
-      .setLabel("⬅ Prev")
+      .setLabel("Prev")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(page === 0),
 
     new ButtonBuilder()
       .setCustomId(`keys_next_${page}`)
-      .setLabel("Next ➡")
+      .setLabel("Next")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(start + PAGE_SIZE >= keys.length)
   );
 
-  // FIX: interaction type safe handling
-  if (i.deferred || i.replied) {
-    return i.editReply({ embeds: [embed], components: [menuRow, navRow] });
-  }
-
-  return i.reply({
-    embeds: [embed],
-    components: [menuRow, navRow],
-    flags: 64,
-  });
+  return i.isChatInputCommand()
+    ? i.editReply({ embeds: [embed], components: [menuRow, navRow] })
+    : i.update({ embeds: [embed], components: [menuRow, navRow] });
 }
 
 /* ---------------- GET KEY ---------------- */
@@ -107,7 +106,6 @@ async function getKey(user) {
   try {
     const res = await axios.get(`${API}/api/keys/unused`, {
       headers: { Authorization: process.env.BOT_SECRET },
-      timeout: 5000,
     });
 
     const key = res.data?.key;
@@ -120,7 +118,7 @@ async function getKey(user) {
     });
 
     return key;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -130,14 +128,13 @@ async function getKey(user) {
 client.on("interactionCreate", async (i) => {
   try {
     /* ---------------- COMMANDS ---------------- */
+
     if (i.isChatInputCommand()) {
       if (!i.deferred) await i.deferReply({ flags: 64 });
 
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
-        return i.editReply(
-          key ? `Key: \`${key}\`` : "No keys available."
-        );
+        return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
       }
 
       if (i.commandName === "keys") {
@@ -145,8 +142,13 @@ client.on("interactionCreate", async (i) => {
       }
     }
 
-    /* ---------------- SELECT KEY ---------------- */
+    /* ---------------- SELECT ---------------- */
+
     if (i.isStringSelectMenu() && i.customId === "key_select") {
+      if (i.values[0] === "none") {
+        return i.reply({ content: "No keys.", flags: 64 });
+      }
+
       const key = i.values[0];
 
       const res = await apiGet(`${API}/api/admin/key/${key}`);
@@ -164,7 +166,8 @@ client.on("interactionCreate", async (i) => {
           { name: "HWID", value: k.hwid || "None" }
         );
 
-      const row = new ActionRowBuilder().addComponents(
+      /* 🔥 IMPORTANT: MAX 5 BUTTONS PER ROW */
+      const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`copy_${k.key}`)
           .setLabel("Copy")
@@ -181,6 +184,13 @@ client.on("interactionCreate", async (i) => {
           .setStyle(ButtonStyle.Danger),
 
         new ButtonBuilder()
+          .setCustomId("back_keys")
+          .setLabel("Back")
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
           .setCustomId(`hwid_${k.key}`)
           .setLabel("HWID")
           .setStyle(ButtonStyle.Secondary),
@@ -188,27 +198,21 @@ client.on("interactionCreate", async (i) => {
         new ButtonBuilder()
           .setCustomId(`banhwid_${k.key}`)
           .setLabel("Ban HWID")
-          .setStyle(ButtonStyle.Danger),
-
-        new ButtonBuilder()
-          .setCustomId("back_keys")
-          .setLabel("Back")
-          .setStyle(ButtonStyle.Secondary)
+          .setStyle(ButtonStyle.Danger)
       );
 
-      return i.update({ embeds: [embed], components: [row] });
+      return i.update({ embeds: [embed], components: [row1, row2] });
     }
 
     /* ---------------- BUTTONS ---------------- */
+
     if (i.isButton()) {
       const parts = i.customId.split("_");
 
-      /* BACK */
       if (i.customId === "back_keys") {
         return renderKeysUI(i, 0);
       }
 
-      /* PAGINATION */
       if (parts[0] === "keys") {
         const dir = parts[1];
         const page = Number(parts[2]) || 0;
@@ -220,9 +224,8 @@ client.on("interactionCreate", async (i) => {
       const action = parts[0];
       const key = parts.slice(1).join("_");
 
-      if (action === "copy") {
+      if (action === "copy")
         return i.reply({ content: `\`${key}\``, flags: 64 });
-      }
 
       if (action === "revoke") {
         await apiPost(`${API}/api/admin/revoke`, { key });
