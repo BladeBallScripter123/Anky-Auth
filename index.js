@@ -52,30 +52,28 @@ client.on("interactionCreate", async (i) => {
     }
   }
 
-  /* /dashboard */
   if (i.commandName === "dashboard") {
-    await i.deferReply({ flags: 64 });
+  await i.deferReply({ flags: 64 });
 
-    try {
-      const res = await axios.get(`${API}/admin/stats`, {
-        headers: {
-          "x-admin-secret": process.env.ADMIN_SECRET,
-        },
-      });
+  try {
+    const res = await axios.get(`${API}/api/admin/stats`, {
+      headers: {
+        "x-admin-secret": process.env.ADMIN_SECRET,
+      },
+    });
 
-      const data = res.data;
+    console.log("STATS RESPONSE:", res.data);
 
-      return i.editReply(
-        `Total: ${data.total}\nUsed: ${data.used}\nUnused: ${data.unused}\nRevoked: ${data.revoked}`
-      );
-    } catch (err) {
-      console.error(err);
-      return i.editReply("Dashboard error.");
-    }
+    const data = res.data || {};
+
+    return i.editReply(
+      `Total: ${data.total ?? "?"}\nUsed: ${data.used ?? "?"}\nUnused: ${data.unused ?? "?"}\nRevoked: ${data.revoked ?? "?"}`
+    );
+  } catch (err) {
+    console.error("DASHBOARD ERROR:", err.response?.data || err);
+    return i.editReply("Dashboard error.");
   }
-});
-
-/* ---------------- READY ---------------- */
+}
 
 client.once("ready", () => {
   console.log("Bot online");
