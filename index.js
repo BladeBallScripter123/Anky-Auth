@@ -14,42 +14,23 @@ const client = new Client({
 });
 
 const API = process.env.API_URL;
+const ADMIN = process.env.ADMIN_SECRET;
+
 const PAGE_SIZE = 10;
 
-/* ---------------- HELPERS ---------------- */
+/* ---------------- API ---------------- */
 
-function encodeKey(key) {
-  return Buffer.from(key).toString("base64");
-}
+const api = axios.create({
+  baseURL: API,
+  timeout: 5000,
+  headers: { "x-admin-secret": ADMIN },
+});
 
-function decodeKey(encoded) {
-  return Buffer.from(encoded, "base64").toString("utf8");
-}
-
-async function apiGet(url) {
-  return axios.get(`${API}${url}`, {
-    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-    timeout: 5000,
-  });
-}
-
-async function apiPost(url, data) {
-  return axios.post(`${API}${url}`, data, {
-    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-    timeout: 5000,
-  });
-}
-
-async function apiDelete(url) {
-  return axios.delete(`${API}${url}`, {
-    headers: { "x-admin-secret": process.env.ADMIN_SECRET },
-    timeout: 5000,
-  });
-}
+/* ---------------- SAFE REPLY ---------------- */
 
 async function safeReply(i, payload) {
   try {
-    if (i.replied || i.deferred) return await i.editReply(payload);
+    if (i.deferred || i.replied) return await i.editReply(payload);
     return await i.reply(payload);
   } catch {
     try {
@@ -60,64 +41,78 @@ async function safeReply(i, payload) {
   }
 }
 
-/* ---------------- UI ---------------- */
-
-async function renderKeysUI(i, page = 0) {
-  const res = await apiGet("/api/admin/keys");
-  const keys = Array.isArray(res.data) ? res.data : [];
-
-  const start = page * PAGE_SIZE;
-  const pageKeys = keys.slice(start, start + PAGE_SIZE);
-
-  const options = pageKeys.slice(0, 25).map((k) => ({
-    label: k.key.slice(0, 25),
-    description: k.revoked
-      ? "🔴 REVOKED"
-      : k.used
-      ? "🟠 USED"
-      : "🟢 FREE",
-    value: k.key,
-  }));
-
-  const embed = new EmbedBuilder()
-    .setTitle("🔑 Key Manager")
-    .setColor(0x2b2d31)
-    .setDescription(`Page ${page + 1} • Total ${keys.length}`);
-
-  const menu = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId("key_select")
-      .setPlaceholder("Select key")
-      .addOptions(
-        options.length ? options : [{ label: "No keys", value: "none" }]
-      )
-  );
-
-  const nav = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`keys_prev_${page}`)
-      .setLabel("Prev")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(page === 0),
-
-    new ButtonBuilder()
-      .setCustomId(`keys_next_${page}`)
-      .setLabel("Next")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(start + PAGE_SIZE >= keys.length)
-  );
-
-  return safeReply(i, { embeds: [embed], components: [menu, nav], flags: 64 });
-}
-
 /* ---------------- GET KEY ---------------- */
 
 async function getKey(user) {
   try {
     const res = await axios.get(`${API}/api/keys/unused`);
-    return res.data?.key || null;
+    const key = res.data?.key;
+    if (!key) return null;
+    return key;
   } catch {
     return null;
+  }
+}
+
+/* ---------------- RENDER UI ---------------- */
+
+async function renderKeysUI(i, page = 0) {
+  try {
+    const res = await api.get("/api/admin/keys");
+    const keys = Array.isArray(res.data) ? res.data : [];
+
+    const start = page * PAGE_SIZE;
+    const pageKeys = keys.slice(start, start + PAGE_SIZE);
+
+    const options = pageKeys.map((k) => ({
+      label: k.key.slice(0, 25),
+      description:
+        k.hwidCount >= 2
+          ? `MULTI (${k.hwidCount})`
+          : k.used
+          ? "USED"
+          : "FREE",
+      value: k.key,
+    }));
+
+    const embed = new EmbedBuilder()
+      .setTitle("🔑 Key Manager")
+      .setColor(0x2b2d31)
+      .setDescription(`Page ${page + 1} • Total ${keys.length}`);
+
+    const menu = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("key_select")
+        .setPlaceholder("Select key")
+        .addOptions(
+          options.length
+            ? options
+            : [{ label: "No keys", value: "none" }]
+        )
+    );
+
+    const nav = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`page_prev_${page}`)
+        .setLabel("Prev")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page === 0),
+
+      new ButtonBuilder()
+        .setCustomId(`page_next_${page}`)
+        .setLabel("Next")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(start + PAGE_SIZE >= keys.length)
+    );
+
+    return safeReply(i, {
+      embeds: [embed],
+      components: [menu, nav],
+      flags: 64,
+    });
+  } catch (err) {
+    console.log("UI ERROR:", err?.message);
+    return safeReply(i, { content: "Failed to load keys", flags: 64 });
   }
 }
 
@@ -125,14 +120,16 @@ async function getKey(user) {
 
 client.on("interactionCreate", async (i) => {
   try {
-    /* COMMANDS */
+    /* ---------- COMMANDS ---------- */
     if (i.isChatInputCommand()) {
-      await i.deferReply({ flags: 64 });
+      if (!i.deferred && !i.replied) {
+        await i.deferReply({ flags: 64 });
+      }
 
       if (i.commandName === "getkey") {
         const key = await getKey(i.user);
         return safeReply(i, {
-          content: key ? `Key: \`${key}\`` : "No keys available.",
+          content: key ? `Key: \`${key}\`` : "No keys available",
         });
       }
 
@@ -141,46 +138,57 @@ client.on("interactionCreate", async (i) => {
       }
     }
 
-    /* SELECT MENU */
+    /* ---------- SELECT ---------- */
     if (i.isStringSelectMenu() && i.customId === "key_select") {
       if (i.values[0] === "none") {
-        return safeReply(i, { content: "No keys.", flags: 64 });
+        return safeReply(i, { content: "No keys", flags: 64 });
       }
 
       const key = i.values[0];
-      const res = await apiGet(`/api/admin/key/${key}`);
+
+      const res = await api.get(`/api/admin/key/${key}`);
       const k = res.data;
 
       const embed = new EmbedBuilder()
-        .setTitle("🔑 Key Details")
+        .setTitle("Key Info")
         .setColor(0x00aaff)
         .addFields(
           { name: "Key", value: `\`${k.key}\`` },
           {
             name: "Status",
-            value: k.revoked ? "REVOKED" : k.used ? "USED" : "FREE",
+            value: k.revoked
+              ? "REVOKED"
+              : k.used
+              ? "USED"
+              : "FREE",
           },
-          { name: "HWID", value: k.hwid || "None" }
+          {
+            name: "HWIDs",
+            value:
+              k.hwids?.length > 0
+                ? k.hwids.join("\n")
+                : "None",
+          }
         );
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`copy_${encodeKey(k.key)}`)
+          .setCustomId(`copy_${k.key}`)
           .setLabel("Copy")
           .setStyle(ButtonStyle.Primary),
 
         new ButtonBuilder()
-          .setCustomId(`revoke_${encodeKey(k.key)}`)
+          .setCustomId(`revoke_${k.key}`)
           .setLabel("Revoke")
           .setStyle(ButtonStyle.Danger),
 
         new ButtonBuilder()
-          .setCustomId(`delete_${encodeKey(k.key)}`)
+          .setCustomId(`delete_${k.key}`)
           .setLabel("Delete")
           .setStyle(ButtonStyle.Danger),
 
         new ButtonBuilder()
-          .setCustomId("back_keys")
+          .setCustomId("back")
           .setLabel("Back")
           .setStyle(ButtonStyle.Secondary)
       );
@@ -188,35 +196,30 @@ client.on("interactionCreate", async (i) => {
       return i.update({ embeds: [embed], components: [row] });
     }
 
-    /* BUTTONS */
+    /* ---------- BUTTONS ---------- */
     if (i.isButton()) {
-      const id = i.customId;
+      const [action, ...rest] = i.customId.split("_");
+      const key = rest.join("_");
 
-      if (id === "back_keys") {
-        return renderKeysUI(i, 0);
-      }
-
-      const [action, encoded] = id.split("_");
-      const key = decodeKey(encoded);
+      if (action === "back") return renderKeysUI(i, 0);
 
       if (action === "copy") {
         return safeReply(i, { content: `\`${key}\``, flags: 64 });
       }
 
       if (action === "revoke") {
-        await apiPost("/api/admin/revoke", { key });
+        await api.post("/api/admin/revoke", { key });
         return safeReply(i, { content: "Revoked", flags: 64 });
       }
 
       if (action === "delete") {
-        await apiDelete(`/api/admin/key/${key}`);
+        await api.delete(`/api/admin/key/${key}`);
         return safeReply(i, { content: "Deleted", flags: 64 });
       }
 
-      /* pagination */
-      if (action === "keys") {
-        const dir = encoded;
-        const page = Number(id.split("_")[2]) || 0;
+      if (action === "page") {
+        const dir = rest[0];
+        const page = Number(rest[1]) || 0;
 
         if (dir === "next") return renderKeysUI(i, page + 1);
         if (dir === "prev") return renderKeysUI(i, Math.max(page - 1, 0));
