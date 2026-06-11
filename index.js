@@ -5,14 +5,14 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-const API = process.env.API_URL as string;
+const API = process.env.API_URL;
 
 /* ---------------- KEY SYSTEM ---------------- */
 
-async function getKey(user: any) {
+async function getKey(user) {
   const res = await axios.get(`${API}/api/keys/unused`, {
     headers: {
-      Authorization: process.env.BOT_SECRET as string,
+      Authorization: process.env.BOT_SECRET,
     },
   });
 
@@ -59,7 +59,7 @@ client.on("interactionCreate", async (i) => {
     try {
       const res = await axios.get(`${API}/admin/stats`, {
         headers: {
-          "x-admin-secret": process.env.ADMIN_SECRET as string,
+          "x-admin-secret": process.env.ADMIN_SECRET,
         },
       });
 
