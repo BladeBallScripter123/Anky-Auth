@@ -45,8 +45,8 @@ client.on("interactionCreate", async (i) => {
 
       return i.editReply(`Key: ${key}`);
     } catch (err) {
-      console.error(err);
-      return i.editReply("Error.");
+      console.error("GETKEY ERROR:", err.response?.data || err);
+      return i.editReply("Error getting key.");
     }
   }
 
@@ -55,11 +55,17 @@ client.on("interactionCreate", async (i) => {
     await i.deferReply({ flags: 64 });
 
     try {
-      const res = await axios.get(`${API}/api/admin/stats`, {
+      const res = await axios.get(`${API}/admin/stats`, {
         headers: {
           "x-admin-secret": process.env.ADMIN_SECRET,
         },
       });
+
+      // 🚨 detect if you hit frontend instead of API
+      if (typeof res.data === "string" && res.data.includes("<!DOCTYPE html>")) {
+        console.log("HIT FRONTEND INSTEAD OF API");
+        return i.editReply("API routing is wrong (returning HTML).");
+      }
 
       console.log("STATS RESPONSE:", res.data);
 
