@@ -1,4 +1,11 @@
-import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} from "discord.js";
 import axios from "axios";
 
 const client = new Client({
@@ -11,9 +18,7 @@ const API = process.env.API_URL;
 
 async function getKey(user) {
   const res = await axios.get(`${API}/api/keys/unused`, {
-    headers: {
-      Authorization: process.env.BOT_SECRET,
-    },
+    headers: { Authorization: process.env.BOT_SECRET },
   });
 
   const key = res.data?.key;
@@ -29,80 +34,151 @@ async function getKey(user) {
   return key;
 }
 
+/* ---------------- PAGINATED KEYS ---------------- */
+
+function buildKeysEmbed(keys, page, totalPages) {
+  return new EmbedBuilder()
+    .setTitle("🔑 Key Dashboard")
+    .setColor(0x2b2d31)
+    .setFooter({ text: `Page ${page + 1} / ${totalPages}` })
+    .setTimestamp()
+    .setDescription(
+      keys.length
+        ? keys
+            .map((k) => {
+              let status = "FREE";
+              if (k.revoked) status = "REVOKED";
+              else if (k.used) status = "USED";
+
+              return `\`${k.key}\`\nStatus: **${status}**`;
+            })
+            .join("\n\n")
+        : "No keys found."
+    );
+}
+
+function buildPagination(page, totalPages) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`keys_prev_${page}`)
+      .setLabel("⬅ Prev")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === 0),
+
+    new ButtonBuilder()
+      .setCustomId(`keys_next_${page}`)
+      .setLabel("Next ➡")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page >= totalPages - 1)
+  );
+}
+
 /* ---------------- INTERACTIONS ---------------- */
 
 client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand()) return;
+  if (!i.isChatInputCommand() && !i.isButton()) return;
 
   try {
+    /* ---------------- BUTTONS (PAGINATION) ---------------- */
+    if (i.isButton()) {
+      const [type, dir, pageStr] = i.customId.split("_");
+
+      if (type === "keys") {
+        const page = parseInt(pageStr);
+        const res = await axios.get(`${API}/api/admin/keys`, {
+          headers: { "x-admin-secret": process.env.ADMIN_SECRET },
+        });
+
+        const keys = res.data || [];
+        const pageSize = 5;
+        const totalPages = Math.ceil(keys.length / pageSize);
+
+        let newPage = page;
+
+        if (dir === "next") newPage++;
+        if (dir === "prev") newPage--;
+
+        const start = newPage * pageSize;
+        const slice = keys.slice(start, start + pageSize);
+
+        const embed = buildKeysEmbed(slice, newPage, totalPages);
+        const row = buildPagination(newPage, totalPages);
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
+    }
+
+    /* ---------------- DEFER ---------------- */
     if (!i.deferred && !i.replied) {
       await i.deferReply({ flags: 64 }).catch(() => {});
     }
 
-    /* GETKEY */
+    /* ---------------- GETKEY ---------------- */
     if (i.commandName === "getkey") {
       const key = await getKey(i.user);
-
-      if (!key) return i.editReply("No keys available.");
-
-      return i.editReply(`Key: ${key}`);
+      return i.editReply(key ? `Key: \`${key}\`` : "No keys available.");
     }
 
-    /* KEYS */
+    /* ---------------- KEYS (PAGED UI) ---------------- */
     if (i.commandName === "keys") {
       const res = await axios.get(`${API}/api/admin/keys`, {
-        headers: {
-          "x-admin-secret": process.env.ADMIN_SECRET,
-        },
+        headers: { "x-admin-secret": process.env.ADMIN_SECRET },
       });
 
-      const keys = (res.data || []).slice(0, 10);
+      const keys = res.data || [];
+      const pageSize = 5;
+      const page = 0;
+      const totalPages = Math.ceil(keys.length / pageSize);
 
-      const text = keys
-        .map(k => `${k.key} | ${k.used ? "USED" : "FREE"}`)
-        .join("\n");
+      const slice = keys.slice(0, pageSize);
 
-      return i.editReply(text || "No keys.");
+      const embed = buildKeysEmbed(slice, page, totalPages);
+      const row = buildPagination(page, totalPages);
+
+      return i.editReply({ embeds: [embed], components: [row] });
     }
 
-    /* ACTIVITY */
+    /* ---------------- ACTIVITY ---------------- */
     if (i.commandName === "activity") {
       const res = await axios.get(`${API}/api/admin/activity`, {
-        headers: {
-          "x-admin-secret": process.env.ADMIN_SECRET,
-        },
+        headers: { "x-admin-secret": process.env.ADMIN_SECRET },
       });
 
       const logs = (res.data || []).slice(0, 10);
 
-      const text = logs
-        .map(l => `${l.event} | ${l.key ?? "no-key"} | ${l.createdAt}`)
-        .join("\n");
+      const embed = new EmbedBuilder()
+        .setTitle("📜 Activity Log")
+        .setColor(0x2b2d31)
+        .setDescription(
+          logs.length
+            ? logs
+                .map(
+                  (l) =>
+                    `**${l.event}**\nKey: \`${l.key ?? "none"}\`\nTime: ${l.createdAt}`
+                )
+                .join("\n\n")
+            : "No activity."
+        );
 
-      return i.editReply(text || "No activity.");
+      return i.editReply({ embeds: [embed] });
     }
 
-    /* DASHBOARD */
+    /* ---------------- DASHBOARD ---------------- */
     if (i.commandName === "dashboard") {
       const res = await axios.get(`${API}/api/admin/stats`, {
-        headers: {
-          "x-admin-secret": process.env.ADMIN_SECRET,
-        },
+        headers: { "x-admin-secret": process.env.ADMIN_SECRET },
       });
 
       const data = res.data || {};
-
       const percent = data.total
         ? Math.round((data.used / data.total) * 100)
         : 0;
 
       const embed = new EmbedBuilder()
         .setTitle("📊 AnkyAuth Dashboard")
-        .setColor(
-          percent > 80 ? 0xff0000 : percent > 50 ? 0xffa500 : 0x00ff00
-        )
+        .setColor(percent > 80 ? 0xff0000 : percent > 50 ? 0xffa500 : 0x00ff00)
         .addFields(
-          { name: "Total Keys", value: String(data.total ?? 0), inline: true },
+          { name: "Total", value: String(data.total ?? 0), inline: true },
           { name: "Used", value: String(data.used ?? 0), inline: true },
           { name: "Unused", value: String(data.unused ?? 0), inline: true },
           { name: "Revoked", value: String(data.revoked ?? 0), inline: true },
@@ -113,9 +189,8 @@ client.on("interactionCreate", async (i) => {
 
       return i.editReply({ embeds: [embed] });
     }
-
   } catch (err) {
-    console.error("INTERACTION ERROR:", err);
+    console.error(err);
 
     if (!i.replied) {
       await i.reply({ content: "Error.", flags: 64 }).catch(() => {});
